@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "minimum": {
+    "sillytavern": "1.18.0",
+    "tavernHelper": null
+  },
+  "requirements": [
+    {
+      "id": "context",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "load",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().loadWorldInfo",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "save",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().saveWorldInfo",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "headers",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().getRequestHeaders",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "account-read",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().accountStorage.getItem",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "account-write",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().accountStorage.setItem",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "dialog",
+      "owner": "provider",
+      "symbol": "HTMLDialogElement.prototype.showModal",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "clone",
+      "owner": "provider",
+      "symbol": "structuredClone",
+      "required": true,
+      "fallback": null
+    },
+    {
+      "id": "backup",
+      "owner": "provider",
+      "symbol": "indexedDB",
+      "required": false,
+      "fallback": "可以浏览对照，备份存储不可用时阻止写入。"
+    },
+    {
+      "id": "editor",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().reloadWorldInfoEditor",
+      "required": false,
+      "fallback": "保存后手动重新打开世界书编辑器。"
+    }
+  ]
+}

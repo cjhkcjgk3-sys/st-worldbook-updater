@@ -1,0 +1,28 @@
+{
+  "entries": {
+    "0": {
+      "uid": 0,
+      "comment": "示例角色",
+      "key": [
+        "示例角色"
+      ],
+      "keysecondary": [],
+      "content": "【演示旧版】她喜欢清晨散步。",
+      "order": 100,
+      "position": 0,
+      "disable": false,
+      "constant": false
+    },
+    "1": {
+      "uid": 1,
+      "comment": "旧版独有条目",
+      "key": [
+        "旧版保留"
+      ],
+      "content": "【演示】这个条目没有对应新版，更新时会保留。",
+      "order": 90,
+      "position": 0,
+      "disable": false
+    }
+  }
+}

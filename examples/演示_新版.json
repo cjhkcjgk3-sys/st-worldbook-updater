@@ -1,0 +1,28 @@
+{
+  "entries": {
+    "8": {
+      "uid": 8,
+      "comment": "示例角色",
+      "key": [
+        "示例角色"
+      ],
+      "keysecondary": [],
+      "content": "【演示新版】她喜欢清晨散步，也会顺路给朋友带一份早餐。",
+      "order": 110,
+      "position": 0,
+      "disable": false,
+      "constant": false
+    },
+    "9": {
+      "uid": 9,
+      "comment": "新版独有条目",
+      "key": [
+        "新版独有"
+      ],
+      "content": "【演示】在融合模式中勾选后会追加；更新模式下不会新增。",
+      "order": 80,
+      "position": 0,
+      "disable": false
+    }
+  }
+}

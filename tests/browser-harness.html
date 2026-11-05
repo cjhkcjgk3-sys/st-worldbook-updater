@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
+<title>世界书更新器 · 本地测试宿主</title>
+<link rel="stylesheet" href="../style.css">
+<style>body{margin:0;background:#10171d;color:#edf0f2;font:16px 'Noto Sans SC Variable',system-ui}#extensions_settings2{padding:20px;max-width:500px}button{cursor:pointer}</style>
+<body><div id="extensions_settings2"></div>
+<script type="module">
+const cache = new Map(), events = new Map();
+const accountStorage = { getItem: key => localStorage.getItem('test-account:' + key), setItem: (key, value) => localStorage.setItem('test-account:' + key, value) };
+const post = (route, body) => fetch('/api/worldinfo/' + route, {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':'test-only'},body:JSON.stringify(body)});
+const context = {
+  accountStorage,
+  uuidv4: () => crypto.randomUUID(),
+  getRequestHeaders: () => ({'Content-Type':'application/json','X-CSRF-Token':'test-only'}),
+  loadWorldInfo: async name => {
+    if (!cache.has(name)) cache.set(name, await (await post('get', {name})).json());
+    return structuredClone(cache.get(name));
+  },
+  saveWorldInfo: async (name, data) => {
+    cache.set(name, data);
+    await post('edit', {name, data});
+    // Like native core, an HTTP error does not itself reject here.
+  },
+  reloadWorldInfoEditor: () => { window.__editorReloaded = true; },
+  eventTypes: {APP_READY:'app_ready'},
+  eventSource: { on(name, fn) {if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);},removeListener(name, fn){events.get(name)?.delete(fn);} },
+};
+window.SillyTavern = {getContext:() => context};
+window.__host = {cache, context, events};
+window.__extension = await import('../index.js');
+window.__extension.onActivate();
+window.__ready = true;
+</script>
+</body></html>
