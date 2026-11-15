@@ -118,3 +118,16 @@ dialog.stwu-dialog[open] { display: flex; flex-direction: column; }
 .stwu-keyboard .stwu-source-line,
 .stwu-keyboard .stwu-pairbar,
 .stwu-keyboard .stwu-options { display: none; }
+
+/* 定点名单 */
+.stwu-scope { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px 0; }
+.stwu-scope label { font-size: 12px; opacity: .8; }
+.stwu-scope textarea { width: 100%; min-height: 44px; resize: vertical; box-sizing: border-box; font: inherit; padding: 6px 8px; border-radius: 6px; }
+.stwu-scope-report { margin: 0; font-size: 12px; line-height: 1.5; opacity: .85; }
+.stwu-scope-report:empty { display: none; }
+.stwu-scope-forms { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.stwu-scope-spec { font-size: 12px; opacity: .9; }
+.stwu-scope-spec summary { cursor: pointer; }
+.stwu-scope-spec ol { margin: 4px 0; padding-left: 18px; }
+.stwu-scope-spec code { font-size: 11px; }
+.stwu-scope-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

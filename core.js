@@ -252,3 +252,214 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     }
     return { data: validateBook(next), updated, skipped, added, addedPairs };
 }
+
+// 定点名单：对齐 Novel Auto Generator 的世界书命名，只按「名字」做精确匹配。
+// 条目名常见形态：`主角:爱芮`、`角色 - 雷电将军`、`波可娜·费雷尼 (Pulchra Fellini)`，
+// 尾巴偶尔带 `〔2 楼 · 回复 211/247〕` 这类元数据，比较前都要剥掉。
+export const BUILTIN_CATEGORIES = Object.freeze(['角色', '主角', '配角', '地点', '组织', '道具', '玩法', '章节剧情', '角色内心', '剧情大纲', '文风配置']);
+const OPEN_BRACKETS = '(（[［{｛【〔〖「『《〈<＜';
+const CLOSE_BRACKETS = ')）]］}｝】〕〗」』》〉>＞';
+
+export function unifyName(value) {
+    let text = '';
+    for (const character of String(value ?? '').normalize('NFKC')) {
+        if (OPEN_BRACKETS.includes(character)) text += '(';
+        else if (CLOSE_BRACKETS.includes(character)) text += ')';
+        else text += character;
+    }
+    return text.toLowerCase();
+}
+
+/** 去掉标点、符号、空格与间隔号，保留字母、数字和汉字（与生成器 compact 一致）。 */
+export function compactName(value) {
+    return unifyName(value).replace(/[\p{P}\p{S}\p{Cf}\p{Z}\s]+/gu, '');
+}
+
+export function workKeysOf(workNames) {
+    return [...new Set((Array.isArray(workNames) ? workNames : []).map(compactName).filter(Boolean))].sort((a, b) => b.length - a.length);
+}
+
+function splitBrackets(value) {
+    let text = '';
+    for (const character of String(value ?? '').normalize('NFKC')) {
+        if (OPEN_BRACKETS.includes(character)) text += '(';
+        else if (CLOSE_BRACKETS.includes(character)) text += ')';
+        else text += character;
+    }
+    let outside = '', current = '', depth = 0;
+    const groups = [];
+    for (const character of text) {
+        if (character === '(') { if (depth > 0) current += character; depth++; }
+        else if (character === ')' && depth > 0) {
+            depth--;
+            if (depth === 0) { groups.push(current); current = ''; }
+            else current += character;
+        } else if (depth > 0) current += character;
+        else outside += character;
+    }
+    if (depth > 0) outside += current;
+    return { outside, groups };
+}
+
+/** 拆成「作品名 + 角色名 +（形态）」；只去掉已登记的作品名，括号里的内容保留为备注。 */
+export function parseScopedName(value, workKeys = []) {
+    const { outside, groups } = splitBrackets(value);
+    const workSet = new Set(workKeys);
+    const compacted = groups.map(compactName).filter(Boolean);
+    const notes = compacted.filter(note => !workSet.has(note));
+    let work = compacted.find(note => workSet.has(note)) || '';
+    let role = compactName(outside);
+    for (const key of workKeys) {
+        if (role.length > key.length && role.startsWith(key)) { role = role.slice(key.length); work ||= key; break; }
+    }
+    if (workSet.has(role)) { work ||= role; role = ''; }
+    if (!role && notes.length) role = notes.shift();
+    return { role, notes, key: role + notes.join(''), work };
+}
+
+/** 生成器的条目名带前缀：`主角:爱芮`、`角色 - 雷电将军`。取回名字本身。 */
+export function splitCategoryPrefix(comment, workKeys = []) {
+    const text = String(comment ?? '').trim();
+    if (!text) return '';
+    const works = new Set(workKeys), categories = new Set(BUILTIN_CATEGORIES);
+    // 冒号前缀只在左侧确实是分类名时剥离（`主角:爱芮` 这类界面标签）。
+    // 条目本身导出的是纯名字，所以不猜：`Re:Zero` 这类名字保持完整。
+    for (const separator of [':', '：']) {
+        const at = text.indexOf(separator);
+        if (at <= 0) continue;
+        const left = text.slice(0, at).trim(), right = text.slice(at + 1).trim();
+        if (right && categories.has(left)) return right;
+    }
+    const spaced = text.indexOf(' - ');
+    if (spaced > 0) {
+        const right = text.slice(spaced + 3).trim();
+        if (right) return right;
+    }
+    for (const separator of ['-', '—', '·', '・']) {
+        const at = text.indexOf(separator);
+        if (at <= 0) continue;
+        const left = text.slice(0, at).trim(), right = text.slice(at + separator.length).trim();
+        if (!right) continue;
+        if (categories.has(left) || works.has(compactName(left))) return right;
+    }
+    return '';
+}
+
+/** 供展示/复制用的条目名：去掉分类前缀和「〔2 楼 · 回复 211/247〕」这类元数据。 */
+export function cleanEntryName(comment, workKeys = []) {
+    const base = splitCategoryPrefix(comment, workKeys) || String(comment ?? '').trim();
+    if (!base) return '';
+    const { outside, groups } = splitBrackets(base);
+    const aliases = groups.filter(group => !/\d/.test(group)).map(group => '(' + group + ')');
+    const text = (outside.trim() + (aliases.length ? ' ' + aliases.join(' ') : '')).trim();
+    return text || String(comment ?? '').trim();
+}
+
+/** 一个名字的全部写法：主名 + 括号里非数字的别名段（英文名、曾用名）。 */
+function labelVariants(text) {
+    const variants = new Set();
+    const { outside, groups } = splitBrackets(text);
+    const main = compactName(outside);
+    if (main) variants.add(main);
+    for (const group of groups) {
+        if (/\d/.test(group)) continue;
+        for (const part of group.split(/[\/／|｜]+/)) {
+            const key = compactName(part);
+            if (key) variants.add(key);
+        }
+    }
+    return variants;
+}
+
+/** 条目可用于比较的键：完整名、去前缀的主名、括号里的别名、全部关键词。 */
+export function entryNameCandidates(entry, workKeys = []) {
+    const candidates = new Set();
+    const sources = [];
+    if (typeof entry?.comment === 'string' && entry.comment.trim()) sources.push(entry.comment);
+    for (const key of [...(Array.isArray(entry?.key) ? entry.key : []), ...(Array.isArray(entry?.keysecondary) ? entry.keysecondary : [])]) {
+        if (typeof key === 'string' && key.trim()) sources.push(key);
+    }
+    for (const source of sources) {
+        candidates.add(compactName(source));
+        const base = splitCategoryPrefix(source, workKeys) || source;
+        for (const variant of labelVariants(base)) candidates.add(variant);
+        const parsed = parseScopedName(base, workKeys);
+        if (parsed.key) candidates.add(parsed.key);
+    }
+    candidates.delete('');
+    return candidates;
+}
+
+/** 命中返回匹配方式，未命中返回空串。只比名字，不做包含匹配。 */
+export function scopeMatch(entry, names, workKeys = []) {
+    if (!names?.length || !entry) return '';
+    const candidates = entryNameCandidates(entry, workKeys);
+    if (!candidates.size) return '';
+    for (const raw of names) {
+        const base = splitCategoryPrefix(raw, workKeys) || raw;
+        for (const variant of labelVariants(base)) if (candidates.has(variant)) return '名称一致';
+        const parsed = parseScopedName(raw, workKeys);
+        if (parsed.key && candidates.has(parsed.key)) return '去作品名后一致';
+        const full = compactName(raw);
+        if (full && candidates.has(full)) return '名称一致';
+    }
+    return '';
+}
+
+/** 名单支持 `作品别名：原神=Genshin`，其余行按换行/逗号/顿号/等号拆名字。 */
+export function parseNameList(text) {
+    const names = [], works = [];
+    for (const line of String(text ?? '').split(/[\n\r]+/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const declared = trimmed.match(/^(?:作品别名|作品|work)\s*[:：]\s*(.+)$/i);
+        if (declared) {
+            for (const group of declared[1].split(/[、,，;；]/)) {
+                for (const alias of group.split('=')) if (alias.trim()) works.push(alias.trim());
+            }
+            continue;
+        }
+        for (const item of trimmed.split(/[、,，;；|｜=＝]+/)) if (item.trim()) names.push(item.trim());
+    }
+    return { names: [...new Set(names)], works: [...new Set(works)] };
+}
+
+export function scopedEntries(book, names, workKeys = []) {
+    if (!names?.length || !book) return [];
+    return Object.entries(book.entries).filter(([, entry]) => scopeMatch(entry, names, workKeys)).map(([id]) => id);
+}
+
+export function unmatchedNames(book, names, workKeys = []) {
+    if (!names?.length || !book) return [...(names || [])];
+    return names.filter(name => !Object.values(book.entries).some(entry => scopeMatch(entry, [name], workKeys)));
+}
+
+// 名单内的来源条目优先配对“证据更强”的原书条目：标题+完整关键词 > 只对上其中一项。
+// 同一原书条目被多条来源争抢且证据相同时放弃，交给人工配对。
+export function autoMatchScoped(oldBook, newBook, names, workKeys = []) {
+    validateBook(oldBook); validateBook(newBook);
+    if (!names?.length) return autoMatch(oldBook, newBook);
+    const oldEntries = Object.entries(oldBook.entries), winners = new Map();
+    for (const [newId, entry] of Object.entries(newBook.entries)) {
+        if (!scopeMatch(entry, names, workKeys)) continue;
+        const title = entry.comment?.trim() || '', signature = keySignature(entry);
+        let best = 0, bestId = null, tie = false;
+        for (const [oldId, oldEntry] of oldEntries) {
+            let score = 0;
+            if (title && oldEntry.comment?.trim() === title) score += 2;
+            if (signature && keySignature(oldEntry) === signature) score += 2;
+            if (score > best) { best = score; bestId = oldId; tie = false; }
+            else if (score && score === best) tie = true;
+        }
+        if (!bestId || best < 2 || tie) continue;
+        const current = winners.get(bestId);
+        if (!current || best > current.score) winners.set(bestId, { newId, score: best });
+        else if (best === current.score) winners.set(bestId, { newId: null, score: best });
+    }
+    const pairs = [];
+    for (const [oldId, winner] of winners) {
+        if (!winner.newId) continue;
+        pairs.push({ oldId, newId: winner.newId, checked: true, reason: winner.score >= 4 ? '标题与关键词' : '标题或关键词' });
+    }
+    return pairs;
+}

@@ -1,4 +1,4 @@
-import { autoMatch, buildUpdate, canonical, classifyIncoming, listEntries, pairChanged, pairManually, parseBook, title } from './core.js';
+import { autoMatch, autoMatchScoped, buildUpdate, canonical, cleanEntryName, classifyIncoming, listEntries, pairChanged, pairManually, parseBook, parseNameList, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -22,6 +22,8 @@ export class UpdaterWindow {
         this.selectedOld = this.selectedNew = null;
         this.mode = 'content';
         this.fusion = false;
+        this.scopeNames = [];
+        this.scopeWorks = [];
         this.busy = false;
         this.disposed = false;
         this.events = new AbortController();
@@ -84,6 +86,22 @@ export class UpdaterWindow {
             <div><select data-pair-action aria-label="配对操作"><option value="" disabled selected>配对操作</option><option value="pair">配对所选</option><option value="unpair">解除所选配对</option><option value="unpair-all">解除全部配对</option><option value="auto">重新自动匹配</option><option value="new">标记为新条目</option></select><button type="button" data-action="compare">查看正文</button></div>
           </div>
           <footer class="stwu-footer">
+            <div class="stwu-scope">
+              <label for="stwu-scope-input">定点名单</label>
+              <textarea id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
+              <div class="stwu-scope-actions"><button type="button" data-action="copy-names">复制来源条目名</button></div>
+              <p class="stwu-scope-report" data-scope-report role="status"></p>
+              <details class="stwu-scope-spec">
+                <summary>名单怎么写才一定匹配</summary>
+                <ol>
+                  <li>每行一个角色名，写全名（<code>维琳娜·艾嘉德</code>），不带编号、书名号、引号和说明文字。</li>
+                  <li>别名或英文名写在括号里或跟在等号后：<code>零号·安比（安比·德玛拉）</code>、<code>波可娜·费雷尼=Pulchra Fellini</code>。</li>
+                  <li>形态/皮肤自动归到主名下：写 <code>拉菲</code> 会带上 <code>拉菲（改造）</code>。</li>
+                  <li>不要写作品名。要写就必须加一行 <code>作品别名：原神=Genshin</code>，否则会被当成名字的一部分。</li>
+                </ol>
+                <p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p>
+              </details>
+            </div>
             <div class="stwu-options"><select data-selection aria-label="勾选操作"><option value="" disabled selected>勾选操作</option><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></select><select data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
             <div class="stwu-bottom"><details class="stwu-backup"><summary>备份与恢复</summary><div><p class="stwu-backup-info">选择原世界书后查看备份。</p><button type="button" data-action="download">下载备份</button><button type="button" data-action="restore">恢复备份</button></div></details><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="stwu-primary" data-action="apply">替换所选</button></div>
           </footer>`;
@@ -97,6 +115,7 @@ export class UpdaterWindow {
             if (action === 'file') this.find('[data-file]').click();
             if (action === 'compare') this.compare();
             if (action === 'apply') this.run(() => this.apply());
+            if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'restore') this.run(() => this.restore());
             if (action === 'download') this.download();
         });
@@ -123,6 +142,7 @@ export class UpdaterWindow {
             this.message(this.fusion ? '融合模式：勾选的新条目会追加到左侧；待处理条目需先配对或标记新增。' : '更新模式：只更新已配对条目，不新增。');
             this.render();
         });
+        this.on(this.find('[data-scope]'), 'change', () => this.applyScope());
         this.on(this.find('[data-selection]'), 'change', event => {
             const action = event.target.value; event.target.value = '';
             this.setSelection(action);
@@ -236,7 +256,62 @@ export class UpdaterWindow {
         this.selectedOld = this.selectedNew = null;
         this.changeCache.clear();
         this.invalidateIncoming(); this.newSelection.clear(); this.forcedNew.clear();
-        this.pairs = this.oldBook && this.newBook ? autoMatch(this.oldBook, this.newBook) : [];
+        this.pairs = this.oldBook && this.newBook
+            ? (this.scopeNames.length ? autoMatchScoped(this.oldBook, this.newBook, this.scopeNames, workKeysOf(this.scopeWorks)) : autoMatch(this.oldBook, this.newBook))
+            : [];
+    }
+
+    applyScope() {
+        const { names, works } = parseNameList(this.find('[data-scope]').value);
+        const sameNames = names.length === this.scopeNames.length && names.every((name, index) => name === this.scopeNames[index]);
+        const sameWorks = works.length === this.scopeWorks.length && works.every((work, index) => work === this.scopeWorks[index]);
+        if (sameNames && sameWorks) return;
+        this.scopeNames = names;
+        this.scopeWorks = works;
+        this.repair();
+        this.message(this.scopeText() || '未设置定点名单：整本参与替换与复制。');
+        this.render();
+    }
+
+    async copySourceNames() {
+        if (!this.newBook) { this.message('先选择来源世界书，再复制条目名。', true); return; }
+        const names = [];
+        for (const { entry } of listEntries(this.newBook)) {
+            const name = cleanEntryName(entry.comment || '') || title(entry);
+            if (name && !names.includes(name)) names.push(name);
+        }
+        if (!names.length) { this.message('来源世界书没有可用的条目名。', true); return; }
+        const text = names.join('\n');
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('clipboard');
+            await navigator.clipboard.writeText(text);
+            this.message(`已复制 ${names.length} 个来源条目名；交给 AI 挑出属于这本书的角色，再粘回定点名单即可 100% 对上。`);
+        } catch {
+            this.message(`当前浏览器不允许自动复制（共 ${names.length} 个条目名）。可改用电脑浏览器，或按右侧列表手动核对。`, true);
+        }
+    }
+
+    inScope(id) {
+        if (!this.scopeNames.length) return true;
+        return !!this.newBook?.entries?.[id] && !!scopeMatch(this.newBook.entries[id], this.scopeNames, workKeysOf(this.scopeWorks));
+    }
+
+    scopeText() {
+        if (!this.scopeNames.length || !this.newBook) return '';
+        const workKeys = workKeysOf(this.scopeWorks);
+        const hit = Object.values(this.newBook.entries).filter(entry => scopeMatch(entry, this.scopeNames, workKeys)).length;
+        const paired = new Set(this.pairs.map(pair => pair.newId));
+        let addable = 0, blocked = 0;
+        for (const [id, state] of this.incoming()) {
+            if (!this.inScope(id) || paired.has(id)) continue;
+            if (state === 'new') addable++;
+            else if (state === 'review') blocked++;
+        }
+        const missing = unmatchedNames(this.newBook, this.scopeNames, workKeys);
+        const parts = [`名单 ${this.scopeNames.length} 个${this.scopeWorks.length ? `（作品 ${this.scopeWorks.length} 个）` : ''} → 母本命中 ${hit} 条`, `已配对 ${paired.size} 条（替换）`, `可新增 ${addable} 条（复制）`];
+        if (blocked) parts.push(`待处理 ${blocked} 条（需手动配对或标记新增）`);
+        if (missing.length) parts.push(`名单未找到 ${missing.length} 个：${missing.slice(0, 6).join('、')}${missing.length > 6 ? '…' : ''}`);
+        return parts.join('；');
     }
 
     invalidateIncoming() { this.incomingCache = null; }
@@ -244,15 +319,16 @@ export class UpdaterWindow {
         if (!this.oldBook || !this.newBook) return new Map();
         return this.incomingCache ||= classifyIncoming(this.oldBook, this.newBook, this.pairs);
     }
-    addable(id) { const state = this.incoming().get(id); return this.fusion && (state === 'new' || (state === 'review' && this.forcedNew.has(id))); }
+    addable(id) { const state = this.incoming().get(id); return this.fusion && this.inScope(id) && (state === 'new' || (state === 'review' && this.forcedNew.has(id))); }
     selectedAdditions() { return [...this.incoming().keys()].filter(id => this.addable(id) && this.newSelection.get(id) !== false); }
     setSelection(action) {
         const wantUpdates = action === 'all' || action === 'updates', wantAdditions = action === 'all' || action === 'additions';
-        for (const pair of this.pairs) pair.checked = wantUpdates && this.changed(pair);
+        for (const pair of this.pairs) pair.checked = wantUpdates && this.inScope(pair.newId) && this.changed(pair);
         for (const id of this.incoming().keys()) this.newSelection.set(id, wantAdditions && this.addable(id));
         const filtered = !!(this.find('[data-search="old"]').value || this.find('[data-search="new"]').value);
         const labels = { all: '已勾选所有可执行项；待处理和重复条目未选。', none: '已全部取消勾选。', updates: '已仅勾选需要更新的配对。', additions: '已仅勾选可新增的条目。' };
-        this.message(labels[action] + (filtered && action !== 'none' ? '本次勾选也包含搜索隐藏的条目。' : ''));
+        const scoped = this.scopeNames.length ? '当前只处理定点名单内的人物。' : '';
+        this.message(labels[action] + scoped + (filtered && action !== 'none' ? '本次勾选也包含搜索隐藏的条目。' : ''));
         this.render();
     }
 
@@ -286,6 +362,7 @@ export class UpdaterWindow {
     manualPair() {
         try {
             if (!this.selectedOld || !this.selectedNew) return;
+            if (!this.inScope(this.selectedNew)) { this.message('这个来源条目不在定点名单内；请先把它加入名单，或清空名单后整本处理。', true); return; }
             this.pairs = pairManually(this.pairs, this.selectedOld, this.selectedNew);
             this.forcedNew.delete(this.selectedNew); this.newSelection.delete(this.selectedNew); this.invalidateIncoming();
             this.message('已配对，可以查看正文或勾选替换。'); this.render();
@@ -321,16 +398,19 @@ export class UpdaterWindow {
             li.classList.toggle('stwu-entry-selected', id === (side === 'old' ? this.selectedOld : this.selectedNew));
             {
                 const label = element('label', 'stwu-entry-check');
+                const outScope = side === 'new' && !this.inScope(id);
                 const adding = side === 'new' && !pair && this.addable(id);
-                const check = element('input'); check.type = 'checkbox'; check.checked = pair ? !!(changed && pair.checked) : adding && this.newSelection.get(id) !== false; check.disabled = this.busy || !(changed || adding);
-                check.setAttribute('aria-label', `${pair ? '更新' : side === 'new' ? '新增' : '保留'}：${title(entry)}`);
+                const check = element('input'); check.type = 'checkbox'; check.checked = pair ? !!(changed && pair.checked) : adding && this.newSelection.get(id) !== false; check.disabled = this.busy || outScope || !(changed || adding);
+                check.setAttribute('aria-label', `${pair ? '更新' : side === 'new' ? outScope ? '名单外，不参与' : '新增' : '保留'}：${title(entry)}`);
                 label.append(check); li.append(label);
             }
             const button = element('button', 'stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
             button.setAttribute('aria-pressed', String(li.classList.contains('stwu-entry-selected')));
             button.append(element('span', 'stwu-entry-title', title(entry)));
             const state = side === 'new' ? this.incoming().get(id) : null;
-            const unpairedLabel = side === 'old' ? '保留' : state === 'duplicate' ? '相同条目已跳过' : state === 'review' ? (this.forcedNew.has(id) ? '已标记新增' : '待处理') : state === 'new' ? '新条目' : '待载入原书';
+            const unpairedLabel = side === 'old' ? '保留'
+                : side === 'new' && !this.inScope(id) ? '名单外'
+                : state === 'duplicate' ? '相同条目已跳过' : state === 'review' ? (this.forcedNew.has(id) ? '已标记新增' : '待处理') : state === 'new' ? '新条目' : '待载入原书';
             const status = element('span', 'stwu-entry-status', pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}` : unpairedLabel);
             status.classList.toggle('stwu-paired', !!pair || (side === 'new' && this.addable(id))); button.append(status);
             li.append(button); fragment.append(li);
@@ -342,7 +422,8 @@ export class UpdaterWindow {
     }
 
     renderControls() {
-        for (const node of this.dialog.querySelectorAll('select, input, button')) node.disabled = this.busy;
+        for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
+        this.find('[data-scope-report]').textContent = this.scopeText();
         const dirty = this.pairs.filter(p => this.changed(p)), selected = this.selectedPairs(), additions = this.selectedAdditions();
         this.find('[data-selection]').disabled = this.busy || (!dirty.length && ![...this.incoming().keys()].some(id => this.addable(id)) && !this.pairs.some(p => p.checked) && !this.newSelection.size);
         for (const action of ['updates', 'additions']) {
@@ -409,11 +490,13 @@ export class UpdaterWindow {
     }
 
     async apply() {
-        const result = buildUpdate(this.oldBook, this.newBook, this.pairs, this.mode, { merge: this.fusion, additions: this.selectedAdditions(), approvedNew: [...this.forcedNew] });
+        const additions = this.selectedAdditions();
+        const result = buildUpdate(this.oldBook, this.newBook, this.pairs, this.mode, { merge: this.fusion, additions, approvedNew: [...this.forcedNew] });
         if (!(result.updated + result.added)) { this.message('没有需要写入的内容。'); return; }
         const scope = this.mode === 'content' ? '仅替换正文，保留原设置' : '完整更新条目，同步新版标题、关键词及设置';
         const addedNote = result.added ? '\n新增条目保留完整设置。' : '';
-        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n已有条目：${scope}${addedNote}\n写入前自动备份。确认继续？`)) return;
+        const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.length} 个名字，名单外人物不参与。\n` : '';
+        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n${scopeNote}已有条目：${scope}${addedNote}\n写入前自动备份。确认继续？`)) return;
         this.message('正在备份、保存并核验世界书…');
         try {
             const saved = await this.service.update(this.oldName, this.oldBook, result.data);
