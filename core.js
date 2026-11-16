@@ -57,44 +57,92 @@ function keySignature(entry) {
     return keys.length ? JSON.stringify(keys) : '';
 }
 
-export function autoMatch(oldBook, newBook) {
+function matchEntries(oldBook, newBook, inScope) {
     validateBook(oldBook); validateBook(newBook);
-    const titles = new Map(), keys = new Map();
+    const titles = new Map(), signatures = new Map();
     function index(map, key, id) {
         if (!key) return;
         if (!map.has(key)) map.set(key, new Set());
         map.get(key).add(id);
     }
     for (const [id, entry] of Object.entries(oldBook.entries)) {
-        index(titles, entry.comment?.trim(), id);
-        index(keys, keySignature(entry), id);
+        const name = entry.comment?.trim() || '';
+        if (name) {
+            if (!titles.has(name)) titles.set(name, { ids: new Set(), keys: new Map(), sizes: new Map() });
+            const group = titles.get(name), keywords = new Set((entry.key || []).map(x => x.trim()).filter(Boolean));
+            group.ids.add(id);
+            group.sizes.set(id, keywords.size);
+            for (const key of keywords) index(group.keys, key, id);
+        }
+        index(signatures, keySignature(entry), id);
     }
-    const proposals = [], claims = new Map(), resolutions = new Map();
+    const winners = new Map(), resolutions = new Map();
     for (const [id, entry] of Object.entries(newBook.entries)) {
+        if (inScope && !inScope(entry)) continue;
         const name = entry.comment?.trim() || '', signature = keySignature(entry);
         const combination = JSON.stringify([name, signature]);
         if (!resolutions.has(combination)) {
-            const byTitle = titles.get(name), byKey = keys.get(signature);
-            let oldId = null;
-            if (byTitle?.size && byKey?.size) {
-                const [small, large] = byTitle.size <= byKey.size ? [byTitle, byKey] : [byKey, byTitle];
-                // Only uniqueness matters. Stop at two matches; never build a cross-product.
-                for (const candidate of small) if (large.has(candidate)) {
-                    if (oldId !== null) { oldId = null; break; }
-                    oldId = candidate;
+            const group = titles.get(name), byKey = signatures.get(signature);
+            const sourceKeys = signature ? JSON.parse(signature) : [];
+            const partialScore = (candidate, overlap) => 3 + overlap / (1 + Math.max(sourceKeys.length, group.sizes.get(candidate)));
+            let oldId = null, score = 0, exactTie = false;
+            if (group) {
+                if (byKey) {
+                    const [small, large] = group.ids.size <= byKey.size ? [group.ids, byKey] : [byKey, group.ids];
+                    let count = 0;
+                    for (const candidate of small) if (large.has(candidate)) {
+                        oldId = candidate;
+                        if (++count === 2) break;
+                    }
+                    if (count === 1) score = 4;
+                    else if (count > 1) { oldId = null; exactTie = true; }
                 }
-            } else {
-                const only = byTitle?.size ? byTitle : byKey;
-                if (only?.size === 1) oldId = only.values().next().value;
+                if (!score && !exactTie && group.ids.size === 1) {
+                    const candidate = group.ids.values().next().value;
+                    const overlap = sourceKeys.filter(key => group.keys.get(key)?.has(candidate)).length;
+                    // An exact keyword signature identifying a different entry is conflicting evidence.
+                    if (!byKey || byKey.has(candidate) || overlap || !group.keys.size) { oldId = candidate; score = overlap ? partialScore(candidate, overlap) : 2; }
+                } else if (!score && !exactTie && group.ids.size > 1 && signature) {
+                    const postings = sourceKeys.map(key => group.keys.get(key)).filter(Boolean).sort((a, b) => a.size - b.size);
+                    if (postings.length) {
+                        // A match in every posting has the highest possible overlap; stop on a tie.
+                        let perfect = null, count = 0;
+                        for (const candidate of postings[0]) if (postings.every(set => set.has(candidate))) {
+                            perfect = candidate;
+                            if (++count === 2) break;
+                        }
+                        if (count === 1) { oldId = perfect; score = partialScore(perfect, postings.length); }
+                        else if (!count) {
+                            const counts = new Map();
+                            for (const posting of postings) for (const candidate of posting) counts.set(candidate, (counts.get(candidate) || 0) + 1);
+                            let best = 0, tie = false;
+                            for (const [candidate, value] of counts) {
+                                if (value > best) { oldId = candidate; best = value; tie = false; }
+                                else if (value === best) tie = true;
+                            }
+                            if (tie) oldId = null;
+                            else if (oldId !== null) score = partialScore(oldId, best);
+                        }
+                    }
+                }
+            } else if (byKey?.size === 1) {
+                oldId = byKey.values().next().value;
+                score = 2;
             }
-            resolutions.set(combination, { oldId, reason: byTitle?.size && byKey?.size ? '标题与关键词' : byTitle?.size ? '标题相同' : '关键词相同' });
+            resolutions.set(combination, { oldId, score, reason: score >= 3 ? '标题与关键词' : group ? '标题相同' : '关键词相同' });
         }
         const resolved = resolutions.get(combination);
         if (resolved.oldId === null) continue;
-        proposals.push({ oldId: resolved.oldId, newId: id, checked: true, reason: resolved.reason });
-        claims.set(resolved.oldId, (claims.get(resolved.oldId) || 0) + 1);
+        const current = winners.get(resolved.oldId);
+        if (!current || resolved.score > current.score) winners.set(resolved.oldId, { ...resolved, newId: id });
+        else if (resolved.score === current.score) winners.set(resolved.oldId, { ...current, newId: null });
     }
-    return proposals.filter(pair => claims.get(pair.oldId) === 1);
+    return [...winners.values()].filter(winner => winner.newId !== null)
+        .map(({ oldId, newId, reason }) => ({ oldId, newId, checked: true, reason }));
+}
+
+export function autoMatch(oldBook, newBook) {
+    return matchEntries(oldBook, newBook);
 }
 
 export function pairManually(pairs, oldId, newId) {
@@ -132,30 +180,24 @@ function entrySignature(entry) {
 }
 
 export function classifyIncoming(oldBook, newBook, pairs = []) {
-    const result = new Map(), paired = new Set(pairs.map(p => p.newId));
-    const oldTitles = new Set(), oldKeys = new Set(), signatures = new Set();
+    const result = new Map(), paired = new Set(pairs.map(p => String(p.newId)));
+    const oldTitles = new Set(), oldKeys = new Set();
     for (const entry of Object.values(oldBook.entries)) {
         if (entry.comment?.trim()) oldTitles.add(entry.comment.trim());
         for (const key of entry.key || []) if (key.trim()) oldKeys.add(key.trim());
-        signatures.add(entrySignature(entry));
     }
     const identityCounts = new Map();
     for (const entry of Object.values(newBook.entries)) {
         const identity = JSON.stringify([entry.comment?.trim() || '', keySignature(entry)]);
-        if (!identityCounts.has(identity)) identityCounts.set(identity, new Set());
-        identityCounts.get(identity).add(entrySignature(entry));
+        identityCounts.set(identity, (identityCounts.get(identity) || 0) + 1);
     }
     for (const [id, entry] of Object.entries(newBook.entries)) {
         const name = entry.comment?.trim() || '', keys = (entry.key || []).map(x => x.trim()).filter(Boolean);
-        const signature = entrySignature(entry);
         let state;
         if (paired.has(id)) state = 'paired';
-        else if (signatures.has(signature)) state = 'duplicate';
-        else if ((!name && !keys.length) || oldTitles.has(name) || keys.some(k => oldKeys.has(k)) || identityCounts.get(JSON.stringify([name, keySignature(entry)])).size > 1) state = 'review';
+        else if ((!name && !keys.length) || oldTitles.has(name) || keys.some(k => oldKeys.has(k)) || identityCounts.get(JSON.stringify([name, keySignature(entry)])) > 1) state = 'review';
         else state = 'new';
         result.set(id, state);
-        // Identical incoming copies are represented once, never added twice by bulk selection.
-        signatures.add(signature);
     }
     return result;
 }
@@ -186,10 +228,10 @@ function syncOriginal(book, id, entry, source, mode, givenOriginal = null) {
     if (!Array.isArray(book.originalData?.entries)) return;
     const original = givenOriginal || book.originalData.entries.find(x => String(x.id ?? x.uid) === id);
     if (!original) return;
-    original.content = entry.content;
+    if (mode !== 'settings') original.content = entry.content;
     if (mode === 'content') return;
     for (const [key, dest] of Object.entries(originalFields)) if (own(source, key)) original[dest] = clone(entry[key]);
-    if (record(entry.extensions)) original.extensions = merge(original.extensions || {}, entry.extensions);
+    if (mode !== 'settings' && record(entry.extensions)) original.extensions = merge(original.extensions || {}, entry.extensions);
     for (const [key, dest] of Object.entries(extensionFields)) if (own(source, key)) {
         if (!record(original.extensions)) original.extensions = {};
         original.extensions[dest] = clone(entry[key]);
@@ -202,15 +244,18 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     validateBook(oldBook); validateBook(newBook);
     if (!['content', 'full'].includes(mode)) throw new Error('未知的替换范围。');
     const next = clone(oldBook), usedOld = new Set(), usedNew = new Set();
-    const additions = options.additions || [];
-    if (additions.length && !options.merge) throw new Error('请切换到融合模式后再新增条目。');
+    const additions = (options.additions || []).map(String), forced = new Set((options.forceAdditions || []).map(String));
+    if ((additions.length || forced.size) && !options.merge) throw new Error('请切换到融合模式后再新增条目。');
+    const selectedAdditions = new Set(additions);
+    for (const id of forced) if (!selectedAdditions.has(id)) throw new Error('强制复制条目必须同时列入新增选择。');
     let updated = 0, skipped = 0, added = 0;
     for (const pair of pairs) {
-        const { oldId, newId } = pair;
+        const oldId = String(pair.oldId), newId = String(pair.newId);
         if (!own(oldBook.entries, oldId) || !own(newBook.entries, newId)) throw new Error('配对中的条目不存在，请重新载入世界书。');
         if (usedOld.has(oldId) || usedNew.has(newId)) throw new Error('配对重复，已停止替换。');
         usedOld.add(oldId); usedNew.add(newId);
-        if (!pair.checked) continue;
+        if (pair.checked !== true) continue;
+        if (forced.has(newId)) throw new Error('同一条目不能同时更新和强制复制，请先取消更新。');
         const oldEntry = oldBook.entries[oldId], source = newBook.entries[newId];
         const entry = replacement(oldEntry, source, mode);
         if (canonical(entry) === canonical(oldEntry)) { skipped++; continue; }
@@ -220,20 +265,24 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     }
     const addedPairs = [];
     if (options.merge && additions.length) {
-        const states = classifyIncoming(oldBook, newBook, pairs), approved = new Set(options.approvedNew || []);
+        const states = classifyIncoming(oldBook, newBook, pairs), approved = new Set((options.approvedNew || []).map(String));
         const seen = new Set(Object.values(next.entries).map(entrySignature)), requested = new Set(), used = new Set(Object.keys(next.entries));
+        if (Array.isArray(next.originalData?.entries)) for (const entry of next.originalData.entries) {
+            for (const id of [entry.id, entry.uid]) if (id !== undefined && /^(0|[1-9]\d*)$/.test(String(id))) used.add(String(id));
+        }
         const portableSources = new Map((Array.isArray(newBook.originalData?.entries) ? newBook.originalData.entries : []).map(entry => [String(entry.id ?? entry.uid), entry]));
         let uid = 0;
-        let total = used.size;
+        let total = Object.keys(next.entries).length;
         let displayIndex = Math.ceil(Object.entries(next.entries).reduce((m, [id, entry]) => Math.max(m, Number.isFinite(entry.displayIndex) ? entry.displayIndex : Number(id)), -1));
         for (const newId of additions) {
             if (!own(newBook.entries, newId)) throw new Error('待新增条目已不存在，请重新载入。');
             if (requested.has(newId)) throw new Error('新增条目被重复选择，已停止融合。');
             requested.add(newId);
-            if (usedNew.has(newId)) throw new Error('已配对条目不能同时作为新条目加入，请先解除配对。');
-            if (states.get(newId) === 'review' && !approved.has(newId)) throw new Error('存在待处理条目，请先配对或标记为新增。');
+            const force = forced.has(newId);
+            if (usedNew.has(newId) && !force) throw new Error('已配对条目不能同时作为新条目加入，请先解除配对。');
+            if (states.get(newId) === 'review' && !approved.has(newId) && !force) throw new Error('存在待处理条目，请先配对或标记为新增。');
             const source = newBook.entries[newId], signature = entrySignature(source);
-            if (states.get(newId) === 'duplicate' || seen.has(signature)) { skipped++; continue; }
+            if (!force && (states.get(newId) === 'duplicate' || seen.has(signature))) { skipped++; continue; }
             if (total >= 10000) throw new Error('融合后将超过 10000 条，请先拆分世界书。');
             while (used.has(String(uid))) uid++;
             const entry = { ...clone(source), uid, displayIndex: ++displayIndex };
@@ -309,6 +358,8 @@ export function applySettingsPatch(entry, patch) {
         const current = Number(entry[key]);
         const raw = op.mode === 'add' ? (Number.isFinite(current) ? current : 0) + Number(op.value) : op.value;
         next[key] = clampSetting(field, raw);
+        // Blue (constant) and green (keyword) both clear the vectorized third state.
+        if (key === 'constant') next.vectorized = false;
     }
     return next;
 }
@@ -317,13 +368,28 @@ export function applySettingsPatch(entry, patch) {
 export function pickSettings(entry, keys) {
     const picked = {};
     for (const key of keys || []) {
-        if (!SETTINGS_KEYS.has(key) || !own(entry, key)) continue;
-        picked[key] = clone(entry[key]);
+        if (!SETTINGS_KEYS.has(key)) continue;
+        if (key === 'constant') {
+            if (!own(entry, 'constant') && !own(entry, 'vectorized')) continue;
+            picked.constant = Boolean(entry.constant);
+            picked.vectorized = !picked.constant && Boolean(entry.vectorized);
+        } else if (own(entry, key)) picked[key] = clone(entry[key]);
     }
     return picked;
 }
 
-// 定点名单：对齐 Novel Auto Generator 的世界书命名，只按「名字」做精确匹配。
+/** 原地写入选定的设置值，并同步可选的角色书导出镜像。 */
+export function setBookEntrySettings(book, id, values) {
+    const key = String(id);
+    if (!record(book?.entries) || !own(book.entries, key)) throw new Error('设置条目不存在，请重新载入世界书。');
+    const picked = pickSettings(values || {}, Object.keys(values || {}));
+    const entry = { ...book.entries[key], ...picked };
+    book.entries[key] = entry;
+    syncOriginal(book, key, entry, picked, 'settings');
+    return entry;
+}
+
+// 定点名单：对齐 Novel Auto Generator 的世界书命名，匹配名字与主要关键词。
 // 条目名常见形态：`主角:爱芮`、`角色 - 雷电将军`、`波可娜·费雷尼 (Pulchra Fellini)`，
 // 尾巴偶尔带 `〔2 楼 · 回复 211/247〕` 这类元数据，比较前都要剥掉。
 export const BUILTIN_CATEGORIES = Object.freeze(['角色', '主角', '配角', '地点', '组织', '道具', '玩法', '章节剧情', '角色内心', '剧情大纲', '文风配置']);
@@ -441,12 +507,12 @@ function labelVariants(text) {
     return variants;
 }
 
-/** 条目可用于比较的键：完整名、去前缀的主名、括号里的别名、全部关键词。 */
+/** 条目可用于比较的键：完整名、去前缀的主名、括号里的别名和主要关键词。 */
 export function entryNameCandidates(entry, workKeys = []) {
     const candidates = new Set();
     const sources = [];
     if (typeof entry?.comment === 'string' && entry.comment.trim()) sources.push(entry.comment);
-    for (const key of [...(Array.isArray(entry?.key) ? entry.key : []), ...(Array.isArray(entry?.keysecondary) ? entry.keysecondary : [])]) {
+    for (const key of (Array.isArray(entry?.key) ? entry.key : [])) {
         if (typeof key === 'string' && key.trim()) sources.push(key);
     }
     for (const source of sources) {
@@ -476,12 +542,21 @@ export function scopeMatch(entry, names, workKeys = []) {
     return '';
 }
 
-/** 名单支持 `作品别名：原神=Genshin`，其余行按换行/逗号/顿号/等号拆名字。 */
+/** 名单支持作品别名、分隔符拆分，以及整行 JSON 字符串字面名。 */
 export function parseNameList(text) {
     const names = [], works = [];
     for (const line of String(text ?? '').split(/[\n\r]+/)) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        if (trimmed.startsWith('"')) {
+            try {
+                const literal = JSON.parse(trimmed);
+                if (typeof literal === 'string') {
+                    if (literal.trim()) names.push(literal.trim());
+                    continue;
+                }
+            } catch { /* 按普通名单行处理。 */ }
+        }
         const declared = trimmed.match(/^(?:作品别名|作品|work)\s*[:：]\s*(.+)$/i);
         if (declared) {
             for (const group of declared[1].split(/[、,，;；]/)) {
@@ -542,32 +617,8 @@ export function orderWithPinned(entries, blockIds) {
         .map(item => item.entry);
 }
 
-// 名单内的来源条目优先配对“证据更强”的原书条目：标题+完整关键词 > 只对上其中一项。
-// 同一原书条目被多条来源争抢且证据相同时放弃，交给人工配对。
+// 名单只限制来源范围；与整本匹配共用相同的身份和冲突判定。
 export function autoMatchScoped(oldBook, newBook, names, workKeys = []) {
-    validateBook(oldBook); validateBook(newBook);
     if (!names?.length) return autoMatch(oldBook, newBook);
-    const oldEntries = Object.entries(oldBook.entries), winners = new Map();
-    for (const [newId, entry] of Object.entries(newBook.entries)) {
-        if (!scopeMatch(entry, names, workKeys)) continue;
-        const title = entry.comment?.trim() || '', signature = keySignature(entry);
-        let best = 0, bestId = null, tie = false;
-        for (const [oldId, oldEntry] of oldEntries) {
-            let score = 0;
-            if (title && oldEntry.comment?.trim() === title) score += 2;
-            if (signature && keySignature(oldEntry) === signature) score += 2;
-            if (score > best) { best = score; bestId = oldId; tie = false; }
-            else if (score && score === best) tie = true;
-        }
-        if (!bestId || best < 2 || tie) continue;
-        const current = winners.get(bestId);
-        if (!current || best > current.score) winners.set(bestId, { newId, score: best });
-        else if (best === current.score) winners.set(bestId, { newId: null, score: best });
-    }
-    const pairs = [];
-    for (const [oldId, winner] of winners) {
-        if (!winner.newId) continue;
-        pairs.push({ oldId, newId: winner.newId, checked: true, reason: winner.score >= 4 ? '标题与关键词' : '标题或关键词' });
-    }
-    return pairs;
+    return matchEntries(oldBook, newBook, entry => scopeMatch(entry, names, workKeys));
 }

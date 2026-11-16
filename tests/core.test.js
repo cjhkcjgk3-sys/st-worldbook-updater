@@ -107,6 +107,28 @@ test('支持 BOM 与不含 uid 的原生条目，完整更新不引入来源 uid
     const result = buildUpdate(a, b, autoMatch(a, b), 'full');
     assert.equal(result.updated, 1); assert.equal('uid' in result.data.entries[0], false);
 });
+test('目标缺少关键词时仍可按唯一名字自动配对', () => {
+    const old = book(e(0, '角色A', []), e(1, '无关角色', ['常用词']));
+    const source = book(e(9, '角色A', ['常用词'], '新正文'));
+    assert.deepEqual(autoMatch(old, source), [{ oldId: '0', newId: '9', checked: true, reason: '标题相同' }]);
+});
+
+test('同名人物用主关键词择唯一最佳，正文和次要关键词不参与身份', () => {
+    const old = book(e(0, '爱丽丝', ['角色', '甲'], '正文甲', { keysecondary: ['乙'] }), e(1, '爱丽丝', ['角色', '乙'], '正文乙', { keysecondary: ['甲'] }));
+    const source = book(e(8, '爱丽丝', ['角色', '甲', '新别名'], '正文乙', { keysecondary: ['乙'] }), e(9, '爱丽丝', ['角色', '乙'], '正文甲', { keysecondary: ['甲'] }));
+    assert.deepEqual(autoMatch(old, source).map(p => [p.oldId, p.newId]), [['0', '8'], ['1', '9']]);
+    assert.equal(autoMatch(old, book(e(10, '爱丽丝', ['角色'], '正文甲', { keysecondary: ['甲'] }))).length, 0);
+    assert.equal(autoMatch(old, book(e(10, '爱丽丝', [], '正文甲', { keysecondary: ['甲'] }))).length, 0);
+});
+
+test('多个来源争夺同一目标时更强的姓名加关键词优先，强证据相同仍歧义', () => {
+    const old = book(e(0, '同名', ['角色', '甲']));
+    const source = book(e(8, '同名', []), e(9, '同名', ['甲']), e(10, '同名', ['角色', '甲']));
+    assert.deepEqual(autoMatch(old, source).map(p => p.newId), ['10']);
+    const tied = book(e(8, '同名', ['角色', '甲'], '一'), e(9, '同名', ['甲', '角色'], '二'));
+    assert.deepEqual(autoMatch(old, tied), []);
+});
+
 test('canonical 对对象键排序，不把数组重新排序', () => {
     assert.equal(canonical({ b: 1, a: 2 }), canonical({ a: 2, b: 1 }));
     assert.notEqual(canonical(['a', 'b']), canonical(['b', 'a']));

@@ -58,6 +58,10 @@ const server = http.createServer(async (req,res) => {
             }
         }
         const pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);
+        if(pathname==='/scripts/world-info.js') {
+            res.setHeader('Content-Type','text/javascript; charset=utf-8');
+            return res.end('export const worldInfoCache = window.__host.cache;');
+        }
         if(pathname.startsWith('/__test-fonts/')&&process.env.TEST_FONT_DIR) {
             const fontRoot=path.resolve(process.env.TEST_FONT_DIR),fontFile=path.resolve(fontRoot,pathname.slice('/__test-fonts/'.length));
             if(!fontFile.startsWith(fontRoot+path.sep)){res.statusCode=403;return res.end();}
@@ -205,10 +209,13 @@ try {
         assert.equal(Object.keys(persisted.entries).length,6);assert.equal(persisted.customMetadata,'保留');
         await page.reload();await page.waitForFunction(()=>window.__ready);await page.getByRole('button',{name:'打开世界书更新器',exact:true}).click();
         await page.waitForFunction(()=>!document.querySelector('[data-book="old"]').disabled);
-        await page.locator('[data-book="old"]').selectOption('book:演示_旧版');await page.waitForFunction(()=>!document.querySelector('[data-action="restore"]').disabled);
+        await page.locator('[data-book="old"]').selectOption('book:演示_旧版');
+        await page.locator('[data-list="old"] [data-id="1"]').waitFor();
+        assert.equal(await page.locator('[data-action="restore"]').count(),0);
         assert.equal(state.books.get('演示_旧版').entries[1].content,'新共同正文');assert.equal(state.writes,1);assert.deepEqual(errors,[]);
         await page.evaluate(()=>window.__extension.onDisable());assert.equal(await page.locator('.stwu-dialog,#st-worldbook-updater-launcher').count(),0);
         assert.equal(await page.evaluate(()=>[...window.__host.events.values()].reduce((n,s)=>n+s.size,0)),0);
+        await ctx.close();
     }
 
     reset();{
@@ -241,7 +248,7 @@ try {
     reset();{
         const {page,ctx}=await prepare();state.failWrite=true;
         page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'替换所选',exact:true}).click();
-        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.includes('服务器未保存'));
+        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.includes('服务器未确认保存'));
         assert.equal(await page.locator('[data-action="apply"]').isDisabled(),true);
         assert.deepEqual(state.books.get('演示_旧版'),old);results.push('HTTP 保存失败不误报完成通过');await ctx.close();
     }
@@ -254,8 +261,9 @@ try {
         await page.reload();await page.waitForFunction(()=>window.__ready);await page.getByRole('button',{name:'打开世界书更新器',exact:true}).click();
         await page.waitForFunction(()=>!document.querySelector('[data-book="old"]').disabled);
         await page.locator('[data-book="old"]').selectOption('book:演示_旧版');
-        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.includes('上次更新已核验'));
-        assert.equal(state.writes,1);results.push('保存后断线、刷新后核验且不重复写入通过');await ctx.close();
+        await page.locator('[data-list="old"] [data-id="0"]').waitFor();
+        assert.equal(state.books.get('演示_旧版').entries[0].content,newer.entries[90].content);
+        assert.equal(state.writes,1);results.push('保存后断线，刷新后人工核对且不重复写入通过');await ctx.close();
     }
     reset();{
         const {page,ctx}=await prepare();
@@ -296,10 +304,13 @@ try {
         await page.locator('[data-pair-action]').selectOption('unpair-all');
         assert.equal(await page.locator('.stwu-entry-status').filter({hasText:'配对 '}).count(),0);
         await page.locator('[data-pair-action]').selectOption('auto');
+        assert.match(await page.locator('.stwu-selection').textContent(),/更新 0/);
+        page.once('dialog',d=>d.accept());await page.locator('[data-pair-action]').selectOption('auto-reset');
         assert.match(await page.locator('.stwu-selection').textContent(),/更新 1 · 新增 1/);
-        await clickRow(page,'old','0');await page.locator('[data-pair-action]').selectOption('unpair');
+        await clickRow(page,'old','0');await clickRow(page,'new','90');
+        await page.locator('[data-pair-action]').selectOption('unpair');
         await page.locator('[data-pair-action]').selectOption('pair');
-        assert.match(await page.locator('.stwu-notice').textContent(),/已配对/);
+        assert.match(await page.locator('.stwu-notice').textContent(),/已手动配对/);
         assert.equal(state.writes,0);
         results.push('新条目单侧查看、冲突新增标记与取消、解除全部、重新匹配和手动恢复配对通过');await ctx.close();
     }
@@ -321,7 +332,7 @@ try {
         await page.waitForFunction(()=>!document.querySelector('[data-mode]').disabled);
         assert.match(await page.locator('.stwu-selection').textContent(),/更新 0 · 新增 0/);
         assert.equal(await page.locator('[data-action="apply"]').isDisabled(),true);assert.equal(state.writes,1);
-        assert.deepEqual(state.books.get('演示_旧版'),old);
+        assert.deepEqual(state.books.get('演示_旧版'),merged);
         results.push('融合确认可取消、更新与新增单次保存、编号避让、重复载入不重复追加通过');await ctx.close();
     }
 
@@ -339,7 +350,7 @@ try {
     reset();{
         const {page,ctx}=await prepare();await page.locator('[data-mode]').selectOption('merge-full');state.failWrite=true;
         page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'融合所选',exact:true}).click();
-        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.includes('服务器未保存'));
+        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.includes('服务器未确认保存'));
         assert.deepEqual(state.books.get('演示_旧版'),old);assert.equal(await page.locator('[data-action="apply"]').isDisabled(),true);
         results.push('完整融合保存失败不误报成功，也不留下半本融合数据通过');await ctx.close();
     }

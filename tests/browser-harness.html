@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="st-theme-fixture.css">
 <link rel="stylesheet" href="../style.css">
 <style>body{margin:0;background:#10171d;color:#edf0f2;font:16px 'Noto Sans SC Variable',system-ui}#extensions_settings2{padding:20px;max-width:500px}button{cursor:pointer}</style>
-<body><div id="extensions_settings2"></div>
+<body><select id="world_editor_select" hidden><option value="" selected></option></select><div id="extensions_settings2"></div>
 <script type="module">
 const cache = new Map(), events = new Map();
 const accountStorage = { getItem: key => localStorage.getItem('test-account:' + key), setItem: (key, value) => localStorage.setItem('test-account:' + key, value) };
@@ -25,8 +25,8 @@ const context = {
     // Like native core, an HTTP error does not itself reject here.
   },
   reloadWorldInfoEditor: () => { window.__editorReloaded = true; },
-  eventTypes: {APP_READY:'app_ready'},
-  eventSource: { on(name, fn) {if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);},removeListener(name, fn){events.get(name)?.delete(fn);} },
+  eventTypes: {APP_READY:'app_ready', WORLDINFO_UPDATED:'worldinfo_updated'},
+  eventSource: { on(name, fn) {if(!events.has(name))events.set(name,new Set());events.get(name).add(fn);},removeListener(name, fn){events.get(name)?.delete(fn);}, async emit(name, ...args) {for(const fn of events.get(name)||[]) await fn(...args);} },
 };
 window.SillyTavern = {getContext:() => context};
 window.__host = {cache, context, events};

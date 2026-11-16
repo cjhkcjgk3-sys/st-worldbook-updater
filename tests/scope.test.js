@@ -54,6 +54,18 @@ test('名单支持「作品别名：」声明、别名等号与顿号', () => {
     assert.deepEqual(parseNameList('   '), { names: [], works: [] });
 });
 
+test('整行 JSON 字符串作为字面名，不拆分逗号、等号及转义字符', () => {
+    const literalNames = ['Alice,Bob', '角色=另一个', 'Alice "Ace", Bob', '作品:名字,全名', '路径\\\\名字'];
+    const list = [literalNames.map(name => JSON.stringify(name)).join('\n'), '旧名=别名、其他'].join('\n');
+    const parsed = parseNameList(list);
+    assert.deepEqual(parsed.names, [...literalNames, '旧名', '别名', '其他']);
+    assert.deepEqual(parsed.works, []);
+    const source = book(...literalNames.map((name, uid) => e(uid, name, [])));
+    assert.deepEqual(scopedEntries(source, parsed.names), ['0', '1', '2', '3', '4']);
+    assert.deepEqual(unmatchedNames(source, literalNames), []);
+    assert.deepEqual(parseNameList('""\n "   " '), { names: [], works: [] });
+});
+
 test('名称折叠全半角、括号样式、标点与间隔号', () => {
     assert.equal(compactName('维琳娜·艾嘉德'), compactName('维琳娜艾嘉德'));
     assert.equal(compactName('长门·META'), compactName('长门（META）'));
@@ -82,8 +94,23 @@ test('名单内重名时按证据强弱择优，而不是两条一起作废', ()
         e(0, '主角:王城', ['王城', '首都'], '母本：原神侧'),
         e(1, '主角:王城', ['王城'], '母本：另一个作品'),
     );
-    assert.equal(autoMatch(old, source).length, 0);
+    assert.deepEqual(autoMatch(old, source), [{ oldId: '0', newId: '0', checked: true, reason: '标题与关键词' }]);
     assert.deepEqual(autoMatchScoped(old, source, ['王城']), [{ oldId: '0', newId: '0', checked: true, reason: '标题与关键词' }]);
+});
+
+test('名单只匹配标题和主关键词，不从正文或次要关键词识别人名', () => {
+    const source = book(e(0, '主角:爱芮', ['小爱'], '提到钟离', { keysecondary: ['三月七'] }));
+    assert.deepEqual(scopedEntries(source, ['爱芮']), ['0']);
+    assert.deepEqual(scopedEntries(source, ['小爱']), ['0']);
+    assert.deepEqual(scopedEntries(source, ['三月七', '钟离']), []);
+    assert.deepEqual(unmatchedNames(source, ['三月七', '钟离']), ['三月七', '钟离']);
+});
+
+test('定点配对在同名多目标时使用主关键词，歧义保留人工处理', () => {
+    const old = book(e(0, '主角:爱丽丝', ['作品甲']), e(1, '主角:爱丽丝', ['作品乙']));
+    const source = book(e(9, '主角:爱丽丝', ['作品乙'], '正文甲', { keysecondary: ['作品甲'] }));
+    assert.deepEqual(autoMatchScoped(old, source, ['爱丽丝']).map(pair => pair.oldId), ['1']);
+    assert.deepEqual(autoMatchScoped(old, book(e(9, '主角:爱丽丝', [])), ['爱丽丝']), []);
 });
 
 test('名单里写了母本没有的名字会被报出来', () => {

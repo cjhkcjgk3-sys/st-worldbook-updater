@@ -51,11 +51,11 @@ test('待处理条目须明确标记新增，不能被普通全选偷偷追加',
     assert.equal(result.added, 1); assert.equal(result.data.entries[0].comment, 'A');
 });
 
-test('来源中的完全重复条目只提供一个新增候选', () => {
+test('来源中相同身份均待处理，批准后普通追加仍去重', () => {
     const old = book(), source = book(e(8, 'A', ['a']), e(9, 'A', ['a']));
     const states = classifyIncoming(old, source);
-    assert.equal(states.get('8'), 'new'); assert.equal(states.get('9'), 'duplicate');
-    const result = buildUpdate(old, source, [], 'content', { merge: true, additions: ['8', '9'] });
+    assert.equal(states.get('8'), 'review'); assert.equal(states.get('9'), 'review');
+    const result = buildUpdate(old, source, [], 'content', { merge: true, additions: ['8', '9'], approvedNew: ['8', '9'] });
     assert.equal(result.added, 1); assert.equal(result.skipped, 1);
 });
 
@@ -67,8 +67,8 @@ test('来源同名同关键词但正文不同，不自动把冲突双方都当�
 test('相同已有条目不受 uid 和列表位置影响，不重复追加', () => {
     const old = book(e(0, '', [], '一样', { displayIndex: 4 }));
     const source = book(e(8, '', [], '一样', { displayIndex: 80 }));
-    assert.equal(classifyIncoming(old, source).get('8'), 'duplicate');
-    const result = buildUpdate(old, source, [], 'full', { merge: true, additions: ['8'] });
+    assert.equal(classifyIncoming(old, source).get('8'), 'review');
+    const result = buildUpdate(old, source, [], 'full', { merge: true, additions: ['8'], approvedNew: ['8'] });
     assert.equal(result.added, 0); assert.equal(result.skipped, 1); assert.deepEqual(result.data, old);
 });
 
@@ -116,6 +116,47 @@ test('配对与新增互斥，重复选择、失效编号和非法范围均拒�
     assert.throws(() => buildUpdate(old, source, [], 'full', { merge: true, additions: ['9', '9'] }), /重复选择/);
     assert.throws(() => buildUpdate(old, source, [], 'full', { merge: true, additions: ['999'] }), /不存在/);
     assert.throws(() => buildUpdate(old, source, [], 'other', { merge: true }), /替换范围/);
+});
+
+test('分类只依据标题与主要关键词，正文与次要关键词的变化不改变结果', () => {
+    const old = book(e(0, '旧', ['甲'], '原文', { keysecondary: ['乙'] }));
+    const source = book(e(8, '新', ['乙'], '原文', { keysecondary: ['甲'] }), e(9, '旧', ['丙'], '相同', { keysecondary: [] }));
+    const initial = classifyIncoming(old, source);
+    assert.deepEqual([...initial], [['8', 'new'], ['9', 'review']]);
+    source.entries[8].content = '完全不同'; source.entries[8].keysecondary = [];
+    source.entries[9].content = '其他正文'; source.entries[9].keysecondary = ['乙'];
+    assert.deepEqual([...classifyIncoming(old, source)], [...initial]);
+});
+
+test('显式强制复制支持批量复制已配对、待处理和完全相同条目', () => {
+    const old = book(e(0, 'A', ['a'], '相同'), e(3, 'B', ['b'], '旧'));
+    old.originalData = { entries: [{ id: 0, content: '相同' }, { id: 1, content: '保留的镜像条目' }, { id: 3, content: '旧' }] };
+    const source = book(e(8, 'A', ['a'], '相同'), e(9, 'B', ['b'], '新'), e(10, '', [], '无身份'));
+    const pairs = autoMatch(old, source).map(pair => ({ ...pair, checked: false }));
+    const opts = { merge: true, additions: ['8', '9', '10'], forceAdditions: ['8', '9', '10'] };
+    const result = buildUpdate(old, source, pairs, 'content', opts);
+    assert.equal(result.updated, 0); assert.equal(result.added, 3);
+    assert.deepEqual(result.addedPairs.map(pair => pair.oldId), ['2', '4', '5']);
+    assert.deepEqual(result.addedPairs.map(pair => result.data.entries[pair.oldId].uid), [2, 4, 5]);
+    assert.equal(result.data.entries[0].content, '相同'); assert.equal(result.data.entries[3].content, '旧');
+    assert.equal(buildUpdate(result.data, source, pairs, 'content', opts).added, 3);
+});
+
+test('强制复制必须明确列入新增且不能同时更新同一来源', () => {
+    const old = book(e(0, 'A', ['a'], '旧')), source = book(e(8, 'A', ['a'], '新'));
+    const pairs = autoMatch(old, source);
+    assert.throws(() => buildUpdate(old, source, pairs, 'content', { merge: true, additions: ['8'], forceAdditions: ['8'] }), /同时更新和强制复制/);
+    assert.throws(() => buildUpdate(old, source, [], 'content', { merge: true, additions: [], forceAdditions: ['8'] }), /必须同时列入/);
+    assert.throws(() => buildUpdate(old, source, [], 'content', { forceAdditions: ['8'] }), /融合模式/);
+});
+
+test('显式批准的不同正文同身份条目可以批量新增，重复普通追加不重复', () => {
+    const source = book(e(8, 'A', ['a'], '甲'), e(9, 'A', ['a'], '乙'));
+    const options = { merge: true, additions: ['8', '9'], approvedNew: ['8', '9'] };
+    const first = buildUpdate(book(), source, [], 'content', options);
+    assert.equal(first.added, 2);
+    const again = buildUpdate(first.data, source, [], 'content', options);
+    assert.equal(again.added, 0); assert.equal(again.skipped, 2);
 });
 
 test('融合容量超限时拒绝，输入原书保持原样', () => {
