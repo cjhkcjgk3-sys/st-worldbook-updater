@@ -435,22 +435,24 @@ export function unmatchedNames(book, names, workKeys = []) {
 }
 
 /**
- * 把 blockIds 按给定顺序排到最前，其余条目保持原有相对顺序。
- * 只改 displayIndex（列表位置），不动 order（注入顺序）和正文。
+ * 显示用排序：把 blockIds 按给定顺序排到最前，其余条目保持原有顺序。
+ * 只影响插件列表的显示，不写回世界书；名单清空或匹配断开即恢复原顺序。
  */
-export function reorderPinned(book, blockIds) {
-    validateBook(book);
-    const block = [];
-    const seen = new Set();
+export function orderWithPinned(entries, blockIds) {
+    const rank = new Map();
     for (const id of blockIds) {
         const key = String(id);
-        if (seen.has(key) || !own(book.entries, key)) continue;
-        seen.add(key); block.push(key);
+        if (!rank.has(key)) rank.set(key, rank.size);
     }
-    const rest = listEntries(book).map(({ id }) => id).filter(id => !seen.has(id));
-    const next = clone(book);
-    [...block, ...rest].forEach((id, index) => { next.entries[id].displayIndex = index; });
-    return next;
+    return entries
+        .map((entry, index) => ({ entry, index }))
+        .sort((a, b) => {
+            const left = rank.has(String(a.entry.id)) ? rank.get(String(a.entry.id)) : Number.POSITIVE_INFINITY;
+            const right = rank.has(String(b.entry.id)) ? rank.get(String(b.entry.id)) : Number.POSITIVE_INFINITY;
+            if (left === right) return a.index - b.index;
+            return left - right;
+        })
+        .map(item => item.entry);
 }
 
 // 名单内的来源条目优先配对“证据更强”的原书条目：标题+完整关键词 > 只对上其中一项。

@@ -1,4 +1,4 @@
-import { autoMatch, autoMatchScoped, buildUpdate, canonical, cleanEntryName, classifyIncoming, listEntries, pairChanged, pairManually, parseBook, parseNameList, reorderPinned, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
+import { autoMatch, autoMatchScoped, buildUpdate, canonical, cleanEntryName, classifyIncoming, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -124,7 +124,7 @@ export class UpdaterWindow {
                 <div class="stwu-scope-content">
                   <label for="stwu-scope-input">每行一个名字；留空时处理整本</label>
                   <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
-                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>执行时两侧置顶</span></label></div>
+                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
                   <p class="stwu-scope-report" data-scope-report role="status"></p>
                   <details class="stwu-scope-spec"><summary>名单怎么写才一定匹配</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p></details>
                 </div>
@@ -469,16 +469,21 @@ export class UpdaterWindow {
         const fragment = document.createDocumentFragment();
         const pairsById = new Map(this.pairs.map((p, i) => [side === 'old' ? p.oldId : p.newId, { pair: p, number: i + 1 }]));
         const pinning = this.pinMatches && this.scopeNames.length > 0;
-        const rows = book ? listEntries(book) : [];
         const pinned = new Set();
+        let rows = book ? listEntries(book) : [];
         if (pinning) {
-            for (const { id } of rows) {
-                const linked = pairsById.get(id);
-                const target = side === 'new' ? id : linked?.pair?.newId;
-                if (target && this.inScope(target)) pinned.add(id);
+            // 块内顺序按母本：母本里先出现的角色，置顶后也排在前面。
+            const block = [];
+            for (const { id: newId } of listEntries(this.newBook)) {
+                if (!this.inScope(newId)) continue;
+                if (side === 'new') block.push(newId);
+                else {
+                    const pair = this.pairs.find(item => String(item.newId) === String(newId));
+                    if (pair) block.push(pair.oldId);
+                }
             }
-            // Array#sort 是稳定排序，组内仍按原列表顺序。
-            rows.sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)));
+            for (const id of block) pinned.add(String(id));
+            rows = orderWithPinned(rows, block);
         }
         let visible = 0;
         for (const { id, entry } of rows) {
@@ -569,52 +574,20 @@ export class UpdaterWindow {
         const additions = this.selectedAdditions();
         const result = buildUpdate(this.oldBook, this.newBook, this.pairs, this.mode, { merge: this.fusion, additions, approvedNew: [...this.forcedNew] });
         if (!(result.updated + result.added)) { this.message('没有需要写入的内容。'); return; }
-
-        // 置顶：命中块按母本顺序排到两侧最前，只改 displayIndex。
-        const pinning = this.pinMatches && this.scopeNames.length > 0;
-        let target = result.data;
-        let motherNext = null;
-        let pinCount = 0;
-        if (pinning) {
-            const checked = this.pairs.filter(pair => pair.checked);
-            const addedByNew = new Map(result.addedPairs.map(pair => [String(pair.newId), pair.oldId]));
-            const blockNew = listEntries(this.newBook)
-                .map(({ id }) => id)
-                .filter(id => checked.some(pair => String(pair.newId) === id) || addedByNew.has(id));
-            const targetBlock = blockNew
-                .map(id => checked.find(pair => String(pair.newId) === id)?.oldId ?? addedByNew.get(id))
-                .filter(Boolean);
-            if (targetBlock.length) target = reorderPinned(target, targetBlock);
-            if (blockNew.length && this.sourceKind === 'book' && this.newName) motherNext = reorderPinned(this.newBook, blockNew);
-            pinCount = blockNew.length;
-        }
-
         const scope = this.mode === 'content' ? '仅替换正文，保留原设置' : '完整更新条目，同步新版标题、关键词及设置';
         const addedNote = result.added ? '\n新增条目保留完整设置。' : '';
         const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.length} 个名字，名单外人物不参与。\n` : '';
-        const pinNote = pinCount ? `置顶：两侧各 ${pinCount} 条按母本顺序排到最前（只改列表位置，不改注入顺序）。\n` : '';
-        const motherNoteAsk = this.sourceKind === 'file' ? '母本来自文件，无法置顶。\n' : '';
-        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n${scopeNote}${pinNote}${motherNoteAsk}已有条目：${scope}${addedNote}\n确认继续？`)) return;
-        this.message(motherNext ? '正在保存并核验两侧世界书…' : '正在保存并核验世界书…');
+        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n${scopeNote}已有条目：${scope}${addedNote}\n写入前自动备份。确认继续？`)) return;
+        this.message('正在备份、保存并核验世界书…');
         try {
-            const saved = await this.service.update(this.oldName, this.oldBook, target);
+            const saved = await this.service.update(this.oldName, this.oldBook, result.data);
             this.oldBook = saved.data;
-            let motherNote = '';
-            if (motherNext) {
-                try {
-                    const motherSaved = await this.service.update(this.newName, this.newBook, motherNext);
-                    this.newBook = motherSaved.data;
-                    motherNote = '母本已置顶并核验。';
-                } catch (error) {
-                    motherNote = `原书已写入，但母本置顶失败：${error.message}；可再执行一次。`;
-                }
-            }
             this.changeCache.clear();
             this.pairs = [...this.pairs.map(p => ({ ...p, checked: false })), ...result.addedPairs];
             for (const pair of result.addedPairs) { this.newSelection.delete(pair.newId); this.forcedNew.delete(pair.newId); }
             this.invalidateIncoming();
             await this.loadBackup();
-            this.message(`已核验：更新 ${result.updated} 条，新增 ${result.added} 条，跳过 ${result.skipped} 条。${pinCount ? `两侧置顶 ${pinCount} 条。` : ''}${motherNote}${saved.note || ''}`);
+            this.message(`已核验：更新 ${result.updated} 条，新增 ${result.added} 条，跳过 ${result.skipped} 条。${saved.note || ''}`);
         } finally { this.backup = await this.service.store.get(this.oldName).catch(() => this.backup); }
     }
 
