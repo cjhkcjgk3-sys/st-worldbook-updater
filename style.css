@@ -64,25 +64,22 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-header p { margin-top: 3px; color: var(--wu-em); font-size: .8em; }
 .stwu-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
 .stwu .stwu-icon-button { display: inline-flex; width: 34px; min-width: 34px; height: 34px; min-height: 34px; align-items: center; justify-content: center; padding: 0; }
-.stwu-header-menu { position: relative; flex: 0 0 auto; }
-.stwu-header-menu > summary { list-style: none; cursor: pointer; }
-.stwu-header-menu > summary::-webkit-details-marker { display: none; }
-.stwu-header-menu-content { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0; display: flex; width: max-content; min-width: 128px; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--wu-border); border-radius: 8px; background: var(--wu-bg); box-shadow: 0 0 14px var(--black70a,rgba(0,0,0,.45)); }
-.stwu-header-menu-content .menu_button { width: 100%; text-align: left; }
+.stwu .stwu-close-button:hover:enabled { border-color: var(--crimson70a, #e76a6a); }
+.stwu .stwu-mini-btn { min-height: 26px; height: 26px; padding: 2px 8px; font-size: .78em; white-space: nowrap; }
 .stwu-notice { flex: 0 0 auto; max-height: 14dvh; overflow: auto; padding: 6px 10px; border-left: 2px solid var(--wu-quote); background: var(--black30a, rgba(0,0,0,.3)); font-size: .84em; line-height: 1.4; overflow-wrap: anywhere; }
 .stwu-error { border-left-color: var(--crimson70a, #e76a6a); color: var(--wu-text); background: var(--crimson20a, rgba(180,40,40,.18)); }
 
 /* Utility drawers stay above the comparison windows and open one at a time. */
 .stwu-tools { position: relative; z-index: 5; display: grid; flex: 0 0 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 6px 8px 3px; }
-.stwu-tool { position: relative; min-width: 0; }
+.stwu-tool { position: static; min-width: 0; }
 .stwu-tool > summary { display: flex; min-height: 36px; align-items: center; justify-content: center; gap: 6px; overflow: hidden; padding: 4px 7px; border: 1px solid var(--wu-border); border-radius: 7px; cursor: pointer; font-size: .82em; list-style: none; white-space: nowrap; }
 .stwu-tool > summary::-webkit-details-marker { display: none; }
 .stwu-tool[open] > summary { border-color: var(--wu-quote); color: var(--wu-text); }
-.stwu-tool-content { position: absolute; z-index: 20; top: calc(100% + 5px); left: 0; display: flex; width: min(640px, calc(100vw - 34px)); max-height: min(68dvh, 640px); flex-direction: column; gap: 8px; overflow: auto; padding: 10px; border: 1px solid var(--wu-border); border-radius: 9px; background: var(--wu-bg); box-shadow: 0 4px 18px var(--black70a,rgba(0,0,0,.5)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-.stwu-scope.stwu-tool .stwu-tool-content { left: 50%; transform: translateX(-50%); }
-.stwu-settings.stwu-tool .stwu-tool-content { right: 0; left: auto; }
+.stwu-tool-content { position: absolute; z-index: 20; top: calc(100% + 5px); left: 8px; right: 8px; display: flex; width: auto; max-width: 680px; max-height: min(68dvh, 640px); margin: 0 auto; flex-direction: column; gap: 8px; overflow: auto; padding: 10px; border: 1px solid var(--wu-border); border-radius: 9px; background: var(--wu-bg); box-shadow: 0 4px 18px var(--black70a,rgba(0,0,0,.5)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.stwu-tool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--wu-border); font-size: .88em; }
 .stwu-scope-state, .stwu-settings-state { margin-left: auto; color: var(--wu-em); font-size: .82em; }
-.stwu-pairbar-content select { max-width: 400px; }
+.stwu-pair-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.stwu-pair-actions .menu_button { min-height: 34px; padding: 4px 10px; font-size: .84em; }
 .stwu-pairhint { color: var(--wu-em); font-size: .78em; }
 .stwu-scope-content > label { color: var(--wu-em); font-size: .78em; }
 .stwu-scope textarea { min-height: 72px; max-height: 24dvh; }
@@ -107,10 +104,15 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-selection-bar { z-index: 2; display: flex; flex: 0 0 auto; min-height: 42px; align-items: center; gap: 10px; padding: 3px 10px 5px; border-bottom: 1px solid var(--wu-border); }
 .stwu-selection-bar > button { flex: 0 0 auto; min-height: 34px; }
 .stwu-selection-bar > .stwu-pairhint { min-width: 0; }
-.stwu-workspace { position: relative; z-index: 1; display: flex; flex: 1 1 0; min-width: 0; min-height: 0; flex-direction: column; gap: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-.stwu-entry-window, .stwu-body-window { position: relative; flex: 0 0 auto; min-width: 0; overflow: hidden; border: 2px solid var(--wu-border); border-radius: 8px; background: var(--SmartThemeBlurTintColor, rgba(0,0,0,.12)); resize: vertical; }
-.stwu-entry-window { height: clamp(180px, 52%, 520px); min-height: 150px; }
-.stwu-workspace[data-preview-open="false"] .stwu-entry-window { flex: 1 0 auto; height: 100%; min-height: 220px; }
+.stwu-workspace { position: relative; z-index: 1; display: flex; flex: 1 1 0; min-width: 0; min-height: 0; flex-direction: column; gap: 0; overflow: hidden; }
+.stwu-entry-window, .stwu-body-window { position: relative; min-width: 0; min-height: 0; overflow: hidden; border: 2px solid var(--wu-border); border-radius: 8px; background: var(--SmartThemeBlurTintColor, rgba(0,0,0,.12)); }
+.stwu-workspace[data-split="balanced"] .stwu-entry-window { flex: 1.15 1 0; min-height: 130px; }
+.stwu-workspace[data-split="balanced"] .stwu-body-window { flex: 0.85 1 0; min-height: 110px; }
+.stwu-workspace[data-split="list"] .stwu-entry-window { flex: 2.2 1 0; min-height: 160px; }
+.stwu-workspace[data-split="list"] .stwu-body-window { flex: 0.85 1 0; min-height: 96px; }
+.stwu-workspace[data-split="body"] .stwu-entry-window { flex: 0.8 1 0; min-height: 110px; }
+.stwu-workspace[data-split="body"] .stwu-body-window { flex: 2.2 1 0; min-height: 150px; }
+.stwu-workspace[data-preview-open="false"] .stwu-entry-window { flex: 1 1 0; min-height: 0; }
 .stwu-workspace[data-preview-open="false"] .stwu-hard-divider,
 .stwu-workspace[data-preview-open="false"] .stwu-body-window { display: none; }
 .stwu-panels { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-columns: minmax(0,1fr) minmax(0,1fr); overflow: hidden; }
@@ -138,10 +140,13 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu .stwu-pagebar select.text_pole { width: 56px; min-height: 28px; height: 28px; padding: 1px 12px 1px 3px; font-size: .95em; }
 .stwu-pagebar .menu_button { width: 30px; min-width: 30px; min-height: 28px; height: 28px; padding: 0; font-size: 1.15em; line-height: 1; }
 .stwu-pagebar [data-page-status] { min-width: 35px; text-align: center; white-space: nowrap; }
-.stwu-hard-divider { flex: 0 0 9px; min-height: 9px; margin: 4px 0; border-top: 2px solid var(--wu-border); border-bottom: 2px solid var(--wu-border); background: var(--black30a, rgba(0,0,0,.3)); }
-.stwu-body-window { display: flex; height: clamp(150px, 42%, 400px); min-height: 120px; flex-direction: column; }
-.stwu-preview-head { display: flex; flex: 0 0 auto; min-height: 34px; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px; border-bottom: 1px solid var(--wu-border); }
-.stwu-preview-head h3 { display: flex; align-items: center; gap: 7px; color: var(--wu-em); font-size: .86em; }
+.stwu-hard-divider { flex: 0 0 7px; min-height: 7px; margin: 3px 0; border-top: 2px solid var(--wu-border); border-bottom: 2px solid var(--wu-border); background: var(--black30a, rgba(0,0,0,.3)); }
+.stwu-body-window { display: flex; flex-direction: column; }
+.stwu-preview-head { display: flex; flex: 0 0 auto; min-height: 34px; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding: 3px 8px; border-bottom: 1px solid var(--wu-border); }
+.stwu-preview-head h3 { display: flex; align-items: center; gap: 6px; color: var(--wu-em); font-size: .86em; }
+.stwu-preview-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.stwu-split-group { display: inline-flex; align-items: center; gap: 3px; }
+.stwu [data-split-btn][aria-pressed="true"] { border-color: var(--wu-quote); color: var(--wu-text); font-weight: 600; }
 .stwu-preview-grid { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
 .stwu-preview-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 4px; overflow: hidden; padding: 5px 8px; }
 .stwu-preview-pane + .stwu-preview-pane { border-left: 2px solid var(--wu-border); }
@@ -173,14 +178,13 @@ dialog.stwu-dialog.popup.stwu-expanded {
   .stwu-tools { gap: 4px; padding: 4px 4px 2px; }
   .stwu-tool > summary { min-height: 34px; gap: 4px; padding: 3px 4px; font-size: .72em; }
   .stwu-scope-state, .stwu-settings-state { display: none; }
-  .stwu-tool-content { width: calc(100vw - 30px); max-height: min(62dvh, 560px); padding: 8px; }
-  .stwu-scope.stwu-tool .stwu-tool-content { left: 0; transform: none; }
-  .stwu-settings.stwu-tool .stwu-tool-content { right: 0; left: auto; }
+  .stwu-tool-content { left: 4px; right: 4px; max-height: min(62dvh, 560px); padding: 8px; }
   .stwu-selection-bar { min-height: 38px; gap: 6px; padding: 2px 5px 4px; }
   .stwu-selection-bar > button { min-height: 32px; padding: 3px 7px; font-size: .78em; }
   .stwu-selection-bar > .stwu-pairhint { font-size: .68em; line-height: 1.25; }
-  .stwu-entry-window { height: clamp(170px, 48%, 460px); min-height: 140px; }
-  .stwu-workspace[data-preview-open="false"] .stwu-entry-window { min-height: 180px; }
+  .stwu-workspace[data-split="balanced"] .stwu-entry-window { min-height: 110px; }
+  .stwu-workspace[data-split="balanced"] .stwu-body-window { min-height: 96px; }
+  .stwu-workspace[data-preview-open="false"] .stwu-entry-window { min-height: 0; }
   .stwu-pane { gap: 4px; padding: 5px 4px; }
   .stwu-pane-head { min-height: 24px; gap: 3px; }
   .stwu-pane-head h3 { font-size: .82em; }
@@ -197,11 +201,10 @@ dialog.stwu-dialog.popup.stwu-expanded {
   .stwu .stwu-pagebar select.text_pole { width: 42px; min-height: 26px; height: 26px; }
   .stwu-pagebar .menu_button { width: 24px; min-width: 24px; min-height: 26px; height: 26px; }
   .stwu-pagebar [data-page-status] { min-width: 24px; }
-  .stwu-hard-divider { flex-basis: 8px; min-height: 8px; margin: 3px 0; }
-  .stwu-body-window { height: clamp(140px, 38%, 360px); min-height: 110px; }
+  .stwu-hard-divider { flex-basis: 6px; min-height: 6px; margin: 2px 0; }
   .stwu-preview-head { min-height: 30px; padding: 2px 5px; }
   .stwu-preview-head h3 { font-size: .78em; }
-  .stwu-preview-head .stwu-pairhint { font-size: .68em; }
+  .stwu .stwu-mini-btn { min-height: 24px; height: 24px; padding: 1px 6px; font-size: .7em; }
   .stwu-preview-pane { gap: 2px; padding: 3px 5px; }
   .stwu-preview-pane h4 { font-size: .73em; }
   .stwu-preview-keys { font-size: .65em; }
