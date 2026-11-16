@@ -20,6 +20,8 @@ export class UpdaterWindow {
         this.newSelection = new Map();
         this.forcedNew = new Set();
         this.selectedOld = this.selectedNew = null;
+        this.activeSide = 'old';
+        this.scrollPositions = { old: 0, new: 0 };
         this.mode = 'content';
         this.fusion = false;
         this.scopeNames = [];
@@ -33,7 +35,7 @@ export class UpdaterWindow {
         this.build();
         const syncViewport = () => {
             const viewport = globalThis.visualViewport;
-            this.dialog.classList.toggle('stwu-keyboard', !!(viewport && viewport.height < globalThis.innerHeight - 100 && document.activeElement?.matches('[data-search]')));
+            this.dialog.classList.toggle('stwu-keyboard', !!(viewport && viewport.height < globalThis.innerHeight - 100 && document.activeElement?.matches('[data-search], [data-scope]')));
             for (const dialog of [this.dialog, this.compareDialog]) if (dialog) {
                 dialog.style.setProperty('--wu-vh', (viewport?.height || globalThis.innerHeight) + 'px');
                 dialog.style.setProperty('--wu-top', (viewport?.offsetTop || 0) + 'px');
@@ -53,6 +55,34 @@ export class UpdaterWindow {
     on(node, type, fn) { node.addEventListener(type, fn, { signal: this.events.signal }); }
     find(selector) { return this.dialog.querySelector(selector); }
 
+    setActiveSide(side) {
+        if (!['old', 'new'].includes(side)) return;
+        const changed = this.activeSide !== side;
+        if (changed) {
+            const currentList = this.find(`[data-list="${this.activeSide}"]`);
+            if (currentList) this.scrollPositions[this.activeSide] = currentList.scrollTop;
+        }
+        this.activeSide = side;
+        const panels = this.find('.stwu-panels');
+        if (panels) panels.dataset.activeSide = side;
+        for (const button of this.dialog.querySelectorAll('[data-view-side]')) {
+            button.setAttribute('aria-pressed', String(button.dataset.viewSide === side));
+        }
+        if (changed) {
+            const selectedId = side === 'old' ? this.selectedOld : this.selectedNew;
+            const restore = () => {
+                if (this.activeSide !== side) return;
+                const list = this.find(`[data-list="${side}"]`);
+                if (!list) return;
+                list.scrollTop = this.scrollPositions[side];
+                if (selectedId) list.querySelector(`[data-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' });
+                this.scrollPositions[side] = list.scrollTop;
+            };
+            if (globalThis.requestAnimationFrame) globalThis.requestAnimationFrame(restore);
+            else restore();
+        }
+    }
+
     build() {
         this.dialog = element('dialog', 'stwu stwu-dialog');
         if (typeof this.dialog.showModal !== 'function') throw new Error('当前浏览器不支持对照窗口，请更新浏览器或 Android WebView。');
@@ -62,10 +92,14 @@ export class UpdaterWindow {
         this.dialog.innerHTML = `
           <header class="stwu-header">
             <div><h2 id="stwu-heading">世界书更新器</h2><p>右侧来源，更新或融合到左侧</p></div>
-            <div class="stwu-header-actions"><button type="button" data-action="reload">重新载入</button><button type="button" data-action="close" aria-label="关闭世界书更新器">关闭</button></div>
+            <div class="stwu-header-actions"><button type="button" data-action="compact-tools" aria-expanded="false">工具</button><button type="button" data-action="reload">重新载入</button><button type="button" data-action="close" aria-label="关闭世界书更新器">关闭</button></div>
           </header>
           <div class="stwu-notice" role="status" aria-live="polite">先选择原世界书，再选择新版或打开 JSON 文件。</div>
-          <div class="stwu-panels">
+          <nav class="stwu-mobile-switch" aria-label="选择要查看的世界书">
+            <button type="button" data-view-side="old" aria-pressed="true"><span>原书</span><span class="stwu-mobile-count" data-mobile-count="old"></span></button>
+            <button type="button" data-view-side="new" aria-pressed="false"><span>新版</span><span class="stwu-mobile-count" data-mobile-count="new"></span></button>
+          </nav>
+          <div class="stwu-panels" data-active-side="old">
             <section class="stwu-pane" data-side="old" aria-label="原世界书">
               <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
               <select aria-label="选择原世界书" data-book="old"></select>
@@ -86,31 +120,43 @@ export class UpdaterWindow {
             <div><select data-pair-action aria-label="配对操作"><option value="" disabled selected>配对操作</option><option value="pair">配对所选</option><option value="unpair">解除所选配对</option><option value="unpair-all">解除全部配对</option><option value="auto">重新自动匹配</option><option value="new">标记为新条目</option></select><button type="button" data-action="compare">查看正文</button></div>
           </div>
           <footer class="stwu-footer">
-            <div class="stwu-scope">
-              <label for="stwu-scope-input">定点名单</label>
-              <textarea id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
-              <div class="stwu-scope-actions"><button type="button" data-action="copy-names">复制来源条目名</button></div>
-              <p class="stwu-scope-report" data-scope-report role="status"></p>
-              <details class="stwu-scope-spec">
-                <summary>名单怎么写才一定匹配</summary>
-                <ol>
-                  <li>每行一个角色名，写全名（<code>维琳娜·艾嘉德</code>），不带编号、书名号、引号和说明文字。</li>
-                  <li>别名或英文名写在括号里或跟在等号后：<code>零号·安比（安比·德玛拉）</code>、<code>波可娜·费雷尼=Pulchra Fellini</code>。</li>
-                  <li>形态/皮肤自动归到主名下：写 <code>拉菲</code> 会带上 <code>拉菲（改造）</code>。</li>
-                  <li>不要写作品名。要写就必须加一行 <code>作品别名：原神=Genshin</code>，否则会被当成名字的一部分。</li>
-                </ol>
-                <p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p>
-              </details>
-            </div>
+            <details class="stwu-scope">
+              <summary><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
+              <div class="stwu-scope-content">
+                <label for="stwu-scope-input">每行一个名字；留空时处理整本</label>
+                <textarea id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
+                <div class="stwu-scope-actions"><button type="button" data-action="copy-names">复制来源条目名</button></div>
+                <p class="stwu-scope-report" data-scope-report role="status"></p>
+                <details class="stwu-scope-spec">
+                  <summary>名单怎么写才一定匹配</summary>
+                  <ol>
+                    <li>每行一个角色名，写全名（<code>维琳娜·艾嘉德</code>），不带编号、书名号、引号和说明文字。</li>
+                    <li>别名或英文名写在括号里或跟在等号后：<code>零号·安比（安比·德玛拉）</code>、<code>波可娜·费雷尼=Pulchra Fellini</code>。</li>
+                    <li>形态/皮肤自动归到主名下：写 <code>拉菲</code> 会带上 <code>拉菲（改造）</code>。</li>
+                    <li>不要写作品名。要写就必须加一行 <code>作品别名：原神=Genshin</code>，否则会被当成名字的一部分。</li>
+                  </ol>
+                  <p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p>
+                </details>
+              </div>
+            </details>
             <div class="stwu-options"><select data-selection aria-label="勾选操作"><option value="" disabled selected>勾选操作</option><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></select><select data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
             <div class="stwu-bottom"><details class="stwu-backup"><summary>备份与恢复</summary><div><p class="stwu-backup-info">选择原世界书后查看备份。</p><button type="button" data-action="download">下载备份</button><button type="button" data-action="restore">恢复备份</button></div></details><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="stwu-primary" data-action="apply">替换所选</button></div>
           </footer>`;
         document.body.append(this.dialog);
+        this.find('.stwu-scope').open = globalThis.matchMedia?.('(min-width: 681px) and (min-height: 521px)').matches ?? true;
+        this.setActiveSide(this.activeSide);
         this.on(this.dialog, 'cancel', event => { event.preventDefault(); if (!this.busy) this.hide(); });
         this.on(this.dialog, 'click', event => {
             const action = event.target.closest('[data-action]')?.dataset.action;
             if (!action || this.busy) return;
             if (action === 'close') this.hide();
+            if (action === 'compact-tools') {
+                const expanded = !this.dialog.classList.contains('stwu-tools-expanded');
+                this.dialog.classList.toggle('stwu-tools-expanded', expanded);
+                const button = this.find('[data-action="compact-tools"]');
+                button.setAttribute('aria-expanded', String(expanded));
+                button.textContent = expanded ? '收起' : '工具';
+            }
             if (action === 'reload') this.run(() => this.reload());
             if (action === 'file') this.find('[data-file]').click();
             if (action === 'compare') this.compare();
@@ -119,10 +165,22 @@ export class UpdaterWindow {
             if (action === 'restore') this.run(() => this.restore());
             if (action === 'download') this.download();
         });
+        this.on(this.find('.stwu-mobile-switch'), 'click', event => {
+            const side = event.target.closest('[data-view-side]')?.dataset.viewSide;
+            if (!side) return;
+            this.setActiveSide(side);
+            this.renderControls();
+        });
         for (const side of ['old', 'new']) {
-            this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
+            this.on(this.find(`[data-book="${side}"]`), 'change', e => {
+                this.setActiveSide(side);
+                this.run(() => this.loadSide(side, e.target.value));
+            });
             this.on(this.find(`[data-search="${side}"]`), 'input', () => this.renderList(side));
             const list = this.find(`[data-list="${side}"]`);
+            this.on(list, 'scroll', () => {
+                if (this.activeSide === side) this.scrollPositions[side] = list.scrollTop;
+            });
             this.on(list, 'click', event => {
                 const button = event.target.closest('.stwu-entry-button');
                 if (button) this.select(side, button.closest('[data-id]').dataset.id);
@@ -166,6 +224,7 @@ export class UpdaterWindow {
             if (file) this.run(async () => {
                 if (file.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，请先拆分世界书。');
                 const book = parseBook(await file.text());
+                this.setActiveSide('new');
                 this.newBook = book; this.newName = file.name; this.sourceKind = 'file';
                 this.repair(); this.selectors(); this.message(`已载入 ${file.name}，自动配对 ${this.pairs.length} 组。`);
             });
@@ -229,6 +288,7 @@ export class UpdaterWindow {
     }
 
     async loadSide(side, value) {
+        this.setActiveSide(side);
         if (value === 'file:') return;
         const name = value.startsWith('book:') ? value.slice(5) : '';
         if (side === 'old') { this.oldBook = null; this.oldName = name; this.backup = null; }
@@ -342,6 +402,7 @@ export class UpdaterWindow {
 
     select(side, id) {
         if (this.busy) return;
+        this.setActiveSide(side);
         if (side === 'old') this.selectedOld = id; else this.selectedNew = id;
         const pair = this.pairs.find(p => p[side === 'old' ? 'oldId' : 'newId'] === id);
         if (pair) { this.selectedOld = pair.oldId; this.selectedNew = pair.newId; }
@@ -376,6 +437,7 @@ export class UpdaterWindow {
     }
 
     render() {
+        this.setActiveSide(this.activeSide);
         for (const side of ['old', 'new']) this.renderList(side);
         this.renderControls();
     }
@@ -418,12 +480,16 @@ export class UpdaterWindow {
         if (!visible) fragment.append(element('li', 'stwu-empty', book ? (Object.keys(book.entries).length ? '没有符合条件的条目' : '这本世界书还没有条目') : '尚未载入世界书'));
         list.replaceChildren(fragment); list.scrollTop = scrollTop;
         if (focusedId) list.querySelector(`[data-id="${focusedId}"] ${focusedTag === 'INPUT' ? 'input' : 'button'}`)?.focus({ preventScroll: true });
-        this.find(`[data-side="${side}"] .stwu-count`).textContent = book ? `${visible}/${Object.keys(book.entries).length}` : '';
+        const count = book ? `${visible}/${Object.keys(book.entries).length}` : '';
+        this.find(`[data-side="${side}"] .stwu-count`).textContent = count;
+        this.find(`[data-mobile-count="${side}"]`).textContent = count;
     }
 
     renderControls() {
+        this.setActiveSide(this.activeSide);
         for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
         this.find('[data-scope-report]').textContent = this.scopeText();
+        this.find('[data-scope-state]').textContent = this.scopeNames.length ? `限定 ${this.scopeNames.length} 个名字` : '整本参与';
         const dirty = this.pairs.filter(p => this.changed(p)), selected = this.selectedPairs(), additions = this.selectedAdditions();
         this.find('[data-selection]').disabled = this.busy || (!dirty.length && ![...this.incoming().keys()].some(id => this.addable(id)) && !this.pairs.some(p => p.checked) && !this.newSelection.size);
         for (const action of ['updates', 'additions']) {
@@ -453,7 +519,7 @@ export class UpdaterWindow {
                 li.querySelector('input').disabled = this.busy || !(pair ? this.changed(pair) : side === 'new' && this.addable(li.dataset.id));
             }
         }
-        this.find('.stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目' : '点击两边条目可手动配对';
+        this.find('.stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目' : this.selectedOld ? '原书已选，切到新版再选一项' : this.selectedNew ? '新版已选，切到原书再选一项' : '点选两侧条目可手动配对';
     }
 
     compare() {

@@ -85,6 +85,8 @@ async function prepare(width=390,height=844,context=null,allowNoUpdates=false) {
     await page.getByRole('button',{name:'打开世界书更新器',exact:true}).click();
     await page.locator('[data-book="old"] option[value="book:演示_旧版"]').waitFor({state:'attached'});
     await page.locator('[data-book="old"]').selectOption('book:演示_旧版');
+    await page.waitForFunction(()=>!document.querySelector('[data-book="old"]').disabled);
+    await showSide(page,'new');
     await page.locator('[data-book="new"]').waitFor({state:'visible'});
     await page.waitForFunction(()=>!document.querySelector('[data-book="new"]').disabled);
     await page.locator('[data-book="new"]').selectOption('book:演示_新版');
@@ -93,22 +95,35 @@ async function prepare(width=390,height=844,context=null,allowNoUpdates=false) {
     await page.evaluate(()=>document.fonts.ready);
     return {page,ctx,errors};
 }
-const clickRow=(page,side,id)=>page.locator(`[data-list="${side}"] [data-id="${id}"] .stwu-entry-button`).click();
+async function showSide(page,side) {
+    const tab=page.locator(`[data-view-side="${side}"]`);
+    if(await tab.isVisible()) await tab.click();
+}
+async function showCompactTools(page) {
+    const button=page.locator('[data-action="compact-tools"]');
+    if(await button.isVisible()&&await button.getAttribute('aria-expanded')!=='true') await button.click();
+}
+const clickRow=async(page,side,id)=>{await showSide(page,side);await page.locator(`[data-list="${side}"] [data-id="${id}"] .stwu-entry-button`).click();};
 async function assertLayout(page) {
     const metrics=await page.evaluate(()=>{
         const d=document.querySelector('.stwu-dialog'), panels=[...document.querySelectorAll('.stwu-pane')].map(x=>x.getBoundingClientRect());
+        const activeSide=document.querySelector('.stwu-panels').dataset.activeSide;
         const apply=document.querySelector('[data-action="apply"]').getBoundingClientRect();
-        return {viewport:innerWidth,width:d.getBoundingClientRect().width,overflow:d.scrollWidth>d.clientWidth+1,paneWidths:panels.map(x=>x.width),listHeight:document.querySelector('.stwu-list').clientHeight,applyBottom:apply.bottom,viewportHeight:visualViewport.height};
+        return {viewport:innerWidth,width:d.getBoundingClientRect().width,overflow:d.scrollWidth>d.clientWidth+1,paneWidths:panels.map(x=>x.width),visiblePanes:panels.filter(x=>x.width>0).length,activeSide,listHeight:document.querySelector(`.stwu-pane[data-side="${activeSide}"] .stwu-list`).clientHeight,applyBottom:apply.bottom,viewportHeight:visualViewport.height};
     });
     assert.ok(!metrics.overflow,JSON.stringify(metrics));assert.ok(metrics.width<=metrics.viewport+1,JSON.stringify(metrics));
-    assert.ok(Math.abs(metrics.paneWidths[0]-metrics.paneWidths[1])<=1,JSON.stringify(metrics));
+    if(metrics.viewport<=680){assert.equal(metrics.visiblePanes,1,JSON.stringify(metrics));assert.ok(Math.abs(metrics.paneWidths[metrics.activeSide==='old'?0:1]-metrics.width)<=2,JSON.stringify(metrics));}
+    else assert.ok(Math.abs(metrics.paneWidths[0]-metrics.paneWidths[1])<=1,JSON.stringify(metrics));
     assert.ok(metrics.listHeight>30,JSON.stringify(metrics));assert.ok(metrics.applyBottom<=metrics.viewportHeight+1,JSON.stringify(metrics));
+    if(metrics.viewport>=540&&metrics.viewport<=680&&metrics.viewportHeight<=520) assert.ok(metrics.listHeight>=80,JSON.stringify(metrics));
 }
 
 try {
     for(const [w,h] of [[320,568],[360,720],[390,844],[768,1024],[1280,900],[600,360],[640,360],[740,360]]) {
         reset();const {page,ctx,errors}=await prepare(w,h);
         await assertLayout(page);
+        if(w<=680){await showSide(page,'old');await assertLayout(page);assert.equal(await page.locator('[data-view-side="old"]').getAttribute('aria-pressed'),'true');await showSide(page,'new');await assertLayout(page);}
+        if(h<=600){await showCompactTools(page);assert.equal(await page.locator('.stwu-pairbar').isVisible(),true);assert.equal(await page.locator('.stwu-scope').isVisible(),true);await page.locator('[data-action="compact-tools"]').click();await assertLayout(page);}
         if(process.env.SCREENSHOT_DIR) {
             await fs.mkdir(process.env.SCREENSHOT_DIR,{recursive:true});
             await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,`list-${w}x${h}.png`)});
@@ -122,7 +137,7 @@ try {
         assert.equal(await page.locator('[data-list="new"] [data-id="91"] input').isDisabled(),true);
         if(process.env.SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,`fusion-${w}x${h}.png`)});
         await page.locator('[data-mode]').selectOption('content');
-        await clickRow(page,'old','0');await page.getByRole('button',{name:'查看正文',exact:true}).click();
+        await clickRow(page,'old','0');await showCompactTools(page);await page.getByRole('button',{name:'查看正文',exact:true}).click();
         const axes=await page.locator('.stwu-compare-pane').evaluateAll(nodes=>nodes.map(n=>({x:n.getBoundingClientRect().x,y:n.getBoundingClientRect().y,w:n.getBoundingClientRect().width,h:n.getBoundingClientRect().height})));
         if(process.env.SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,`compare-${w}x${h}.png`)});
         if(h>w&&w<=820){assert.equal(axes[0].x,axes[1].x);assert.ok(axes[1].y>axes[0].y);assert.ok(Math.abs(axes[0].h-axes[1].h)<2);}
@@ -136,7 +151,41 @@ try {
     }
 
     reset();{
+        const manyBook=book(Array.from({length:150},(_,i)=>entry(i,`角色 ${String(i+1).padStart(3,'0')}`,[`角色 ${i+1}`],`正文 ${i+1}`)));
+        const manyNew=book(Array.from({length:150},(_,i)=>entry(i+500,`角色 ${String(i+1).padStart(3,'0')}`,[`角色 ${i+1}`],`新版正文 ${i+1}`)));
+        state.books=new Map([['演示_旧版',manyBook],['演示_新版',manyNew]]);
+        const {page,ctx}=await prepare(390,844);
+        await showSide(page,'old');
+        assert.equal(await page.locator('[data-list="old"] .stwu-entry').count(),150);
+        const oldMetrics=await page.locator('[data-list="old"]').evaluate(list=>({height:list.clientHeight,scrollHeight:list.scrollHeight,width:list.clientWidth}));
+        assert.ok(oldMetrics.height>30);assert.ok(oldMetrics.scrollHeight>oldMetrics.height);assert.ok(oldMetrics.width>300);
+        await clickRow(page,'old','80');
+        await page.locator('[data-list="old"] [data-id="80"] .stwu-entry-button').scrollIntoViewIfNeeded();
+        const oldScrollTop=await page.locator('[data-list="old"]').evaluate(list=>list.scrollTop);
+        assert.ok(oldScrollTop>0);
+        await showSide(page,'new');
+        await page.waitForFunction(()=>{const list=document.querySelector('[data-list="new"]'),row=list.querySelector('[data-id="580"]');if(!row)return false;const a=list.getBoundingClientRect(),b=row.getBoundingClientRect();return row.querySelector('button').getAttribute('aria-pressed')==='true'&&b.top>=a.top&&b.bottom<=a.bottom;});
+        await showSide(page,'old');
+        await page.waitForFunction(expected=>document.querySelector('[data-list="old"]').scrollTop===expected,oldScrollTop);
+        assert.equal(await page.locator('[data-list="old"]').evaluate(list=>list.scrollTop),oldScrollTop);
+        await page.locator('[data-search="old"]').fill('角色 090');
+        assert.equal(await page.locator('[data-list="old"] .stwu-entry').count(),1);
+        await showSide(page,'new');
+        await page.locator('[data-search="new"]').fill('角色 121');
+        assert.equal(await page.locator('[data-list="new"] .stwu-entry').count(),1);
+        assert.equal(await page.locator('[data-view-side="new"]').getAttribute('aria-pressed'),'true');
+        await showSide(page,'old');
+        assert.equal(await page.locator('[data-search="old"]').inputValue(),'角色 090');
+        assert.equal(await page.locator('[data-list="old"] .stwu-entry').count(),1);
+        await showSide(page,'new');
+        assert.equal(await page.locator('[data-search="new"]').inputValue(),'角色 121');
+        assert.equal(await page.locator('[data-list="new"] .stwu-entry').count(),1);
+        results.push('手机单列切换、150 条列表滚动、跨侧配对定位与搜索通过');await ctx.close();
+    }
+
+    reset();{
         const {page,ctx}=await prepare();
+        await showSide(page,'old');
         await page.locator('[data-search="old"]').focus();
         await page.evaluate(()=>{
             Object.defineProperty(visualViewport,'height',{value:380,configurable:true});
@@ -228,8 +277,8 @@ try {
         assert.equal(await page.locator('[data-action="apply"]').isDisabled(),true);
         await page.locator('[data-mode]').selectOption('merge-full');
         assert.match(await page.locator('.stwu-selection').textContent(),/更新 0 · 新增 0/);
-        await page.locator('[data-search="old"]').fill('没有显示结果');
-        await page.locator('[data-search="new"]').fill('也没有显示结果');
+        await showSide(page,'old');await page.locator('[data-search="old"]').fill('没有显示结果');
+        await showSide(page,'new');await page.locator('[data-search="new"]').fill('也没有显示结果');
         await page.locator('[data-selection]').selectOption('all');
         assert.match(await page.locator('.stwu-selection').textContent(),/更新 2 · 新增 1/);
         assert.match(await page.locator('.stwu-notice').textContent(),/包含搜索隐藏/);
