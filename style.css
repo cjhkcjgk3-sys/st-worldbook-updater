@@ -24,7 +24,7 @@ dialog.stwu-dialog.popup {
   padding: 4px 14px;
   width: min(1120px, 94vw);
   max-width: 94vw;
-  height: min(840px, calc(var(--wu-vh, 100dvh) - 32px));
+  height: clamp(320px, calc(var(--wu-vh, 100dvh) - 32px), 900px);
   max-height: calc(var(--wu-vh, 100dvh) - 16px);
   min-height: 0;
   color: var(--wu-text);
@@ -139,7 +139,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-backup button { margin: 3px 4px 0 0; font-size: .8em; }
 
 @media (max-width: 680px) {
-  dialog.stwu-dialog.popup { width: calc(100vw - 16px); height: calc(var(--wu-vh,100dvh) - 16px); max-width: calc(100vw - 16px); max-height: calc(var(--wu-vh,100dvh) - 16px); padding: 4px 7px; }
+  dialog.stwu-dialog.popup { width: calc(100vw - 16px); height: clamp(300px, calc(var(--wu-vh,100dvh) - 16px), 100dvh); max-width: calc(100vw - 16px); max-height: calc(var(--wu-vh,100dvh) - 16px); padding: 4px 7px; }
   dialog.stwu-dialog.popup.stwu-expanded { width: 100vw; height: var(--wu-vh,100dvh); max-width: 100vw; max-height: var(--wu-vh,100dvh); padding: 4px 8px; border: 0; border-radius: 0; }
   .stwu-header { padding: max(6px,env(safe-area-inset-top)) 5px 6px; gap: 5px; }
   .stwu-header h2 { font-size: 1em; }
@@ -221,3 +221,8 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-keyboard .stwu-preview,
 .stwu-keyboard .stwu-splitter { display: none; }
 .stwu-keyboard .stwu-workspace { grid-template-rows: minmax(0,1fr) 0 0; }
+
+/* 匹配置顶与名单开关 */
+.stwu-scope-pin { display: flex; align-items: center; gap: 6px; font-size: .78em; white-space: nowrap; }
+.stwu-entry-pinned { box-shadow: inset 3px 0 0 var(--wu-quote); }
+.stwu-workspace { min-height: 240px; }

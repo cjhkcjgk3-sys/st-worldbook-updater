@@ -26,6 +26,7 @@ export class UpdaterWindow {
         this.fusion = false;
         this.scopeNames = [];
         this.scopeWorks = [];
+        this.pinMatches = true;
         this.busy = false;
         this.disposed = false;
         this.events = new AbortController();
@@ -35,7 +36,11 @@ export class UpdaterWindow {
         this.build();
         const syncViewport = () => {
             const viewport = globalThis.visualViewport;
-            const viewportHeight = viewport?.height || globalThis.innerHeight;
+            const layoutHeight = globalThis.innerHeight || 0;
+            const measured = viewport?.height || 0;
+            // Android WebView 在弹窗刚插入或输入法切换瞬间可能报一个很小的 visualViewport，
+            // 直接压扁整个窗口（表现为只看得见一个条目）。小于 200px 时退回布局视口。
+            const viewportHeight = Math.max(320, measured >= 200 ? measured : layoutHeight);
             this.dialog.classList.toggle('stwu-keyboard', !!(viewport && viewport.height < globalThis.innerHeight - 100 && document.activeElement?.matches('[data-search], [data-scope]')));
             this.dialog.style.setProperty('--wu-vh', viewportHeight + 'px');
             const expanded = this.dialog.classList.contains('stwu-expanded');
@@ -119,7 +124,7 @@ export class UpdaterWindow {
                 <div class="stwu-scope-content">
                   <label for="stwu-scope-input">每行一个名字；留空时处理整本</label>
                   <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
-                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button></div>
+                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶</span></label></div>
                   <p class="stwu-scope-report" data-scope-report role="status"></p>
                   <details class="stwu-scope-spec"><summary>名单怎么写才一定匹配</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p></details>
                 </div>
@@ -213,6 +218,7 @@ export class UpdaterWindow {
             this.render();
         });
         this.on(this.find('[data-scope]'), 'change', () => this.applyScope());
+        this.on(this.find('[data-scope-pin]'), 'change', event => { this.pinMatches = event.target.checked; this.render(); });
         this.on(this.find('[data-selection]'), 'change', event => {
             const action = event.target.value; event.target.value = '';
             this.setSelection(action);
@@ -341,6 +347,7 @@ export class UpdaterWindow {
         this.repair();
         this.message(this.scopeText() || '未设置定点名单：整本参与替换与复制。');
         this.render();
+        for (const side of ['old', 'new']) this.find(`[data-list="${side}"]`).scrollTop = 0;
     }
 
     async copySourceNames() {
@@ -461,8 +468,20 @@ export class UpdaterWindow {
         const search = this.find(`[data-search="${side}"]`).value.trim().toLocaleLowerCase();
         const fragment = document.createDocumentFragment();
         const pairsById = new Map(this.pairs.map((p, i) => [side === 'old' ? p.oldId : p.newId, { pair: p, number: i + 1 }]));
+        const pinning = this.pinMatches && this.scopeNames.length > 0;
+        const rows = book ? listEntries(book) : [];
+        const pinned = new Set();
+        if (pinning) {
+            for (const { id } of rows) {
+                const linked = pairsById.get(id);
+                const target = side === 'new' ? id : linked?.pair?.newId;
+                if (target && this.inScope(target)) pinned.add(id);
+            }
+            // Array#sort 是稳定排序，组内仍按原列表顺序。
+            rows.sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)));
+        }
         let visible = 0;
-        for (const { id, entry } of book ? listEntries(book) : []) {
+        for (const { id, entry } of rows) {
             if (search && ![entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search)) continue;
             visible++;
             const linked = pairsById.get(id), pair = linked?.pair, changed = pair && this.changed(pair);
@@ -483,7 +502,8 @@ export class UpdaterWindow {
             const unpairedLabel = side === 'old' ? '保留'
                 : side === 'new' && !this.inScope(id) ? '名单外'
                 : state === 'duplicate' ? '相同条目已跳过' : state === 'review' ? (this.forcedNew.has(id) ? '已标记新增' : '待处理') : state === 'new' ? '新条目' : '待载入原书';
-            const status = element('span', 'stwu-entry-status', pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}` : unpairedLabel);
+            li.classList.toggle('stwu-entry-pinned', pinned.has(id));
+            const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + (pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}` : unpairedLabel));
             status.classList.toggle('stwu-paired', !!pair || (side === 'new' && this.addable(id))); button.append(status);
             li.append(button); fragment.append(li);
         }
