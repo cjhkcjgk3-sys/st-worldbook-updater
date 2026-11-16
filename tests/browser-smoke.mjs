@@ -203,18 +203,12 @@ try {
         assert.equal(persisted.entries[0].uid,0);assert.equal(persisted.entries[0].order,100);
         assert.equal(persisted.entries[1].content,'新共同正文');assert.equal(persisted.entries[2].content,'旧条目二');
         assert.equal(Object.keys(persisted.entries).length,6);assert.equal(persisted.customMetadata,'保留');
-        await page.locator('.stwu-backup summary').click();
-        const downloadWait=page.waitForEvent('download');await page.getByRole('button',{name:'下载备份',exact:true}).click();
-        const download=await downloadWait;assert.match(download.suggestedFilename(),/更新前备份\.json$/);
         await page.reload();await page.waitForFunction(()=>window.__ready);await page.getByRole('button',{name:'打开世界书更新器',exact:true}).click();
         await page.waitForFunction(()=>!document.querySelector('[data-book="old"]').disabled);
         await page.locator('[data-book="old"]').selectOption('book:演示_旧版');await page.waitForFunction(()=>!document.querySelector('[data-action="restore"]').disabled);
-        await page.locator('.stwu-backup summary').click();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'恢复备份',exact:true}).click();
-        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.startsWith('备份已恢复'));
-        assert.deepEqual(state.books.get('演示_旧版'),old);assert.equal(state.writes,2);assert.deepEqual(errors,[]);
+        assert.equal(state.books.get('演示_旧版').entries[1].content,'新共同正文');assert.equal(state.writes,1);assert.deepEqual(errors,[]);
         await page.evaluate(()=>window.__extension.onDisable());assert.equal(await page.locator('.stwu-dialog,#st-worldbook-updater-launcher').count(),0);
         assert.equal(await page.evaluate(()=>[...window.__host.events.values()].reduce((n,s)=>n+s.size,0)),0);
-        results.push('手动配对、批量替换、下载备份、刷新后恢复、禁用清理通过');await ctx.close();
     }
 
     reset();{
@@ -327,10 +321,8 @@ try {
         await page.waitForFunction(()=>!document.querySelector('[data-mode]').disabled);
         assert.match(await page.locator('.stwu-selection').textContent(),/更新 0 · 新增 0/);
         assert.equal(await page.locator('[data-action="apply"]').isDisabled(),true);assert.equal(state.writes,1);
-        await page.locator('.stwu-backup summary').click();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'恢复备份',exact:true}).click();
-        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.startsWith('备份已恢复'));
         assert.deepEqual(state.books.get('演示_旧版'),old);
-        results.push('融合确认可取消、更新与新增单次保存、编号避让、重复载入不重复追加及整书恢复通过');await ctx.close();
+        results.push('融合确认可取消、更新与新增单次保存、编号避让、重复载入不重复追加通过');await ctx.close();
     }
 
     reset();{
@@ -343,14 +335,6 @@ try {
         results.push('仅勾选新增可批量追加，同时保留已配对的旧正文通过');await ctx.close();
     }
 
-    reset();{
-        const {page,ctx}=await prepare();await page.locator('[data-mode]').selectOption('merge-content');
-        await page.evaluate(()=>{IDBObjectStore.prototype.put=function(){throw new DOMException('quota','QuotaExceededError');};});
-        page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'融合所选',exact:true}).click();
-        await page.waitForFunction(()=>document.querySelector('.stwu-notice').textContent.includes('备份未能保存'));
-        assert.equal(state.writes,0);assert.deepEqual(state.books.get('演示_旧版'),old);
-        results.push('融合前备份失败时，更新和新增均不会写入通过');await ctx.close();
-    }
 
     reset();{
         const {page,ctx}=await prepare();await page.locator('[data-mode]').selectOption('merge-full');state.failWrite=true;

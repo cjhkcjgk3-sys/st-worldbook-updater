@@ -5,13 +5,13 @@ import { SETTINGS_FIELDS, applySettingsPatch, buildSettingsPatch, isSettingsFiel
 const entry = () => ({
     uid: '0', comment: '爱芮', key: ['爱芮'], keysecondary: [], content: '正文',
     position: 1, depth: 4, role: 0, order: 100, constant: false,
-    excludeRecursion: false, preventRecursion: false, delayUntilRecursion: 0, ignoreBudget: false, probability: 100,
+    excludeRecursion: false, preventRecursion: false, delayUntilRecursion: 0, ignoreBudget: false,
 });
 
 test('核心字段表包含约定的十项，不含分组与角色过滤', () => {
     assert.deepEqual(SETTINGS_FIELDS.map(f => f.key), [
         'position', 'depth', 'role', 'order', 'constant',
-        'excludeRecursion', 'preventRecursion', 'delayUntilRecursion', 'ignoreBudget', 'probability',
+        'excludeRecursion', 'preventRecursion', 'delayUntilRecursion', 'ignoreBudget',
     ]);
     for (const key of ['group', 'groupWeight', 'characterFilterNames', 'triggers', 'vectorized', 'outletName', 'sticky', 'cooldown']) {
         assert.equal(isSettingsField(key), false, key);
@@ -47,7 +47,6 @@ test('数值夹紧到酒馆范围，相对调整按当前值计算', () => {
     assert.equal(applySettingsPatch(entry(), { order: { mode: 'set', value: -5 } }).order, 0);
     assert.equal(applySettingsPatch(entry(), { depth: { mode: 'add', value: -10 } }).depth, 0);
     assert.equal(applySettingsPatch(entry(), { depth: { mode: 'add', value: 6 } }).depth, 10);
-    assert.equal(applySettingsPatch(entry(), { probability: { mode: 'set', value: 150 } }).probability, 100);
     assert.equal(applySettingsPatch(entry(), { delayUntilRecursion: { mode: 'set', value: 2 } }).delayUntilRecursion, 2);
 });
 

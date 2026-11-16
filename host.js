@@ -1,5 +1,4 @@
 import { canonical, clone, validateBook } from './core.js';
-import { BackupStore } from './storage.js';
 
 export function hostContext() {
     if (typeof globalThis.structuredClone !== 'function') throw new Error('当前浏览器缺少数据复制能力，请更新浏览器或 Android WebView。');
@@ -9,23 +8,10 @@ export function hostContext() {
     return ctx;
 }
 
-export function backupScope(ctx) {
-    const account = ctx.accountStorage;
-    if (typeof account?.getItem !== 'function' || typeof account?.setItem !== 'function') throw new Error('当前酒馆不支持账号隔离的备份存储。');
-    const key = 'st-worldbook-updater.backup-scope';
-    let scope = account.getItem(key);
-    if (!scope) {
-        scope = typeof ctx.uuidv4 === 'function' ? ctx.uuidv4() : [...globalThis.crypto.getRandomValues(new Uint32Array(4))].join('-');
-        account.setItem(key, scope);
-    }
-    return scope;
-}
-
 export class WorldbookService {
-    constructor(context = hostContext, fetcher = globalThis.fetch.bind(globalThis), store = null) {
+    constructor(context = hostContext, fetcher = globalThis.fetch.bind(globalThis)) {
         this.context = context;
         this.fetcher = fetcher;
-        this.store = store || new BackupStore(backupScope(context()));
         this.busy = false;
         this.requiresReload = false;
         this.disabled = false;
@@ -71,72 +57,6 @@ export class WorldbookService {
         return actual;
     }
 
-    async inspectBackup(name, current) {
-        let backup = await this.store.get(name);
-        if (!backup) return { backup: null, message: '' };
-        if (['pending', 'restoring'].includes(backup.status)) {
-            const restoring = backup.status === 'restoring';
-            const intended = restoring ? backup.before : backup.after;
-            const before = restoring ? backup.restoreBefore : backup.before;
-            backup = { ...backup, status: canonical(current) === canonical(intended) ? (restoring ? 'restored' : 'applied') : canonical(current) === canonical(before) ? 'not-applied' : 'uncertain' };
-            await this.store.put(name, backup);
-        }
-        const message = backup.status === 'uncertain' ? '上次操作结果与当前内容不同，备份已保留；请先核对内容。'
-            : backup.status === 'not-applied' ? '上次操作未写入当前世界书，备份已保留。'
-                : backup.status === 'applied' ? '上次更新已核验，可恢复更新前的备份。'
-                    : backup.status === 'restored' ? '世界书已恢复备份。' : '';
-        return { backup, message };
-    }
-
-    async saveAndVerify(name, before, intended, backup, completedStatus) {
-        if (this.disabled) throw new Error('插件已关闭，尚未写入。备份已保留。');
-        let writeError;
-        try { await this.context().saveWorldInfo(name, clone(intended), true); }
-        catch (error) { writeError = error; }
-        let persisted;
-        try { persisted = await this.read(name); }
-        catch {
-            this.requiresReload = true;
-            throw new Error('保存结果尚未确认，备份已保留。请刷新酒馆，重新选择这本书核验；不要连续重复替换。');
-        }
-        const equal = canonical(persisted) === canonical(intended);
-        const status = equal ? completedStatus : canonical(persisted) === canonical(before) ? 'not-applied' : 'uncertain';
-        let note = '';
-        const settledBackup = { ...backup, status };
-        if (equal) delete settledBackup.restoreBefore;
-        try { await this.store.put(name, settledBackup); }
-        catch { note = '备份副本仍保留，但操作状态未能更新。'; }
-        if (!equal) {
-            this.requiresReload = true;
-            throw new Error(status === 'not-applied'
-                ? '服务器未保存本次修改，备份已保留。请检查连接并刷新酒馆后重试。'
-                : '保存后的内容与预期不同，已停止后续操作。备份已保留，请刷新酒馆核对。');
-        }
-        // A host event listener can reject after the server has already saved. Readback is authoritative.
-        if (writeError) note = '文件保存已核验；酒馆刷新通知出错，请刷新页面同步显示。';
-        try {
-            const reload = this.context().reloadWorldInfoEditor;
-            if (typeof reload === 'function') reload(name);
-            else note = '文件保存已核验，请手动重新打开世界书编辑器。';
-        } catch { note = '文件保存已核验，请手动重新打开世界书编辑器。'; }
-        return { data: persisted, note };
-    }
-
-    async update(name, expected, next) {
-        if (this.busy) throw new Error('当前操作尚未结束。');
-        this.busy = true;
-        try {
-            validateBook(next);
-            const before = await this.assertCurrent(name, expected);
-            if (canonical(before) === canonical(next)) return { data: before, note: '内容相同，无需替换。' };
-            const backup = { before: clone(before), after: clone(next), date: new Date().toISOString(), status: 'pending' };
-            await this.store.put(name, backup);
-            // Recheck after local persistence so a changed target never silently uses an obsolete preview.
-            await this.assertCurrent(name, expected);
-            return await this.saveAndVerify(name, before, next, backup, 'applied');
-        } finally { this.busy = false; if (this.disabled) await this.store.close?.(); }
-    }
-
     /** 只改设置时使用：不写备份，直接保存并回读核验。 */
     async updateDirect(name, expected, next) {
         if (this.busy) throw new Error('当前操作尚未结束。');
@@ -175,19 +95,5 @@ export class WorldbookService {
         return { data: persisted, note };
     }
 
-    async restore(name, expectedCurrent, backup) {
-        if (this.busy) throw new Error('当前操作尚未结束。');
-        if (!backup?.before) throw new Error('没有可恢复的备份。');
-        this.busy = true;
-        try {
-            const before = await this.assertCurrent(name, expectedCurrent);
-            validateBook(backup.before);
-            const attempt = { ...backup, status: 'restoring', restoreBefore: clone(before) };
-            await this.store.put(name, attempt);
-            await this.assertCurrent(name, expectedCurrent);
-            return await this.saveAndVerify(name, before, backup.before, attempt, 'restored');
-        } finally { this.busy = false; if (this.disabled) await this.store.close?.(); }
-    }
-
-    close() { this.disabled = true; if (!this.busy) return this.store.close?.(); }
+    close() { this.disabled = true; }
 }

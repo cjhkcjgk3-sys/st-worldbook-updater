@@ -270,7 +270,6 @@ export const SETTINGS_FIELDS = Object.freeze([
     { key: 'preventRecursion', label: '防止进一步递归', kind: 'boolean' },
     { key: 'delayUntilRecursion', label: '延迟到递归', kind: 'number', min: 0, max: 999 },
     { key: 'ignoreBudget', label: '无视回复限额', kind: 'boolean' },
-    { key: 'probability', label: '触发概率', kind: 'number', min: 0, max: 100 },
 ]);
 const SETTINGS_KEYS = new Set(SETTINGS_FIELDS.map(field => field.key));
 

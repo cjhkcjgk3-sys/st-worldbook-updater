@@ -1,4 +1,4 @@
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, canonical, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -11,7 +11,7 @@ export class UpdaterWindow {
     constructor(service) {
         this.service = service;
         this.books = [];
-        this.oldBook = this.newBook = this.backup = null;
+        this.oldBook = this.newBook = null;
         this.oldName = this.newName = '';
         this.sourceKind = 'book';
         this.pairs = [];
@@ -151,7 +151,7 @@ export class UpdaterWindow {
                 </div>
               </details>
               <div class="stwu-options"><select class="text_pole" data-selection aria-label="勾选操作"><option value="" disabled selected>勾选操作</option><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></select><select class="text_pole" data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
-              <div class="stwu-bottom"><details class="stwu-backup"><summary>备份与恢复</summary><div><p class="stwu-backup-info">选择原世界书后查看备份。</p><button type="button" class="menu_button" data-action="download">下载备份</button><button type="button" class="menu_button" data-action="restore">恢复备份</button></div></details><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="menu_button stwu-primary" data-action="apply">替换所选</button></div>
+              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="menu_button stwu-primary" data-action="apply">替换所选</button></div>
             </footer>
           </div></div>`;
         document.body.append(this.dialog);
@@ -185,8 +185,6 @@ export class UpdaterWindow {
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
             if (action === 'sync-settings') this.run(() => this.syncSettingsToTarget());
-            if (action === 'restore') this.run(() => this.restore());
-            if (action === 'download') this.download();
         });
         const splitter = this.find('[data-splitter]');
         const setListSplit = value => {
@@ -314,7 +312,7 @@ export class UpdaterWindow {
         this.message('正在读取世界书列表…');
         this.books = await this.service.list();
         if (this.oldName) {
-            this.oldBook = null; this.backup = null;
+            this.oldBook = null;
             if (this.books.some(x => x.name === this.oldName)) this.oldBook = await this.service.read(this.oldName);
             else this.oldName = '';
         }
@@ -324,14 +322,13 @@ export class UpdaterWindow {
             else this.newName = '';
         }
         this.repair(); this.selectors();
-        const recoveryMessage = await this.loadBackup();
-        this.message(recoveryMessage || (this.oldBook && this.newBook ? `已重新载入，自动配对 ${this.pairs.length} 组。` : '先选择原世界书，再选择新版或打开 JSON 文件。'));
+        this.message(this.oldBook && this.newBook ? `已重新载入，自动配对 ${this.pairs.length} 组。` : '先选择原世界书，再选择新版或打开 JSON 文件。');
     }
 
     async loadSide(side, value) {
         if (value === 'file:') return;
         const name = value.startsWith('book:') ? value.slice(5) : '';
-        if (side === 'old') { this.oldBook = null; this.oldName = name; this.backup = null; }
+        if (side === 'old') { this.oldBook = null; this.oldName = name; }
         else { this.newBook = null; this.newName = name; this.sourceKind = 'book'; }
         this.repair(); this.render();
         if (!name) { this.message('请选择两边的世界书。'); return; }
@@ -340,16 +337,7 @@ export class UpdaterWindow {
         if (side === 'old') this.oldBook = book;
         else this.newBook = book;
         this.repair();
-        const recoveryMessage = side === 'old' ? await this.loadBackup() : '';
-        this.message(recoveryMessage || `已读取 ${name}。${this.oldBook && this.newBook ? `自动配对 ${this.pairs.length} 组。` : ''}`);
-    }
-
-    async loadBackup() {
-        this.backup = null;
-        if (!this.oldBook) return '';
-        const { backup, message } = await this.service.inspectBackup(this.oldName, this.oldBook);
-        this.backup = backup;
-        return message;
+        this.message(`已读取 ${name}。${this.oldBook && this.newBook ? `自动配对 ${this.pairs.length} 组。` : ''}`);
     }
 
     repair() {
@@ -686,9 +674,6 @@ export class UpdaterWindow {
         const newOption = menu.querySelector('[value="new"]');
         newOption.disabled = !this.fusion || !this.selectedNew || this.incoming().get(this.selectedNew) !== 'review';
         newOption.textContent = this.forcedNew.has(this.selectedNew) ? '取消新增标记' : '标记为新条目';
-        this.find('[data-action="download"]').disabled = this.busy || !this.backup;
-        this.find('[data-action="restore"]').disabled = this.busy || !this.backup || this.service.requiresReload;
-        this.find('.stwu-backup-info').textContent = this.backup ? `最近备份：${new Date(this.backup.date).toLocaleString()}。仅保存在当前浏览器，可下载留存。` : '这本世界书尚无备份，写入前会自动保存。';
         for (const side of ['old', 'new']) {
             const pairsById = new Map(this.pairs.map(p => [side === 'old' ? p.oldId : p.newId, p]));
             for (const li of this.dialog.querySelectorAll(`[data-list="${side}"] .stwu-entry`)) {
@@ -723,40 +708,17 @@ export class UpdaterWindow {
         const scope = this.mode === 'content' ? '仅替换正文，保留原设置' : '完整更新条目，同步新版标题、关键词及设置';
         const addedNote = result.added ? '\n新增条目保留完整设置。' : '';
         const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.length} 个名字，名单外人物不参与。\n` : '';
-        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n${scopeNote}已有条目：${scope}${addedNote}\n写入前自动备份。确认继续？`)) return;
-        this.message('正在备份、保存并核验世界书…');
+        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n${scopeNote}已有条目：${scope}${addedNote}\n确认继续？`)) return;
+        this.message('正在保存并核验世界书…');
         try {
-            const saved = await this.service.update(this.oldName, this.oldBook, result.data);
+            const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
             this.oldBook = saved.data;
             this.changeCache.clear();
             this.pairs = [...this.pairs.map(p => ({ ...p, checked: false })), ...result.addedPairs];
             for (const pair of result.addedPairs) { this.newSelection.delete(pair.newId); this.forcedNew.delete(pair.newId); }
             this.invalidateIncoming();
-            await this.loadBackup();
             this.message(`已核验：更新 ${result.updated} 条，新增 ${result.added} 条，跳过 ${result.skipped} 条。${saved.note || ''}`);
-        } finally { this.backup = await this.service.store.get(this.oldName).catch(() => this.backup); }
-    }
-
-    async restore() {
-        if (!this.oldName || !this.backup) return;
-        const current = await this.service.read(this.oldName);
-        const changedLater = canonical(current) !== canonical(this.backup.after) && canonical(current) !== canonical(this.backup.before);
-        const warning = changedLater ? '\n注意：备份后还有其他修改，恢复整本书会覆盖这些修改。建议先在酒馆导出当前世界书。' : '';
-        if (!globalThis.confirm(`恢复“${this.oldName}”到 ${new Date(this.backup.date).toLocaleString()} 的操作前备份？${warning}`)) return;
-        this.message('正在恢复备份并核验…');
-        const saved = await this.service.restore(this.oldName, current, this.backup);
-        this.oldBook = saved.data; this.repair(); await this.loadBackup();
-        this.message('备份已恢复并核验。' + (saved.note || ''));
-    }
-
-    download() {
-        if (!this.backup) return;
-        const url = URL.createObjectURL(new Blob([JSON.stringify(this.backup.before, null, 2)], { type: 'application/json' }));
-        this.urls.add(url);
-        const link = element('a'); link.href = url; link.download = this.oldName.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') + '_更新前备份.json';
-        document.body.append(link); link.click(); link.remove();
-        const timer = setTimeout(() => { URL.revokeObjectURL(url); this.urls.delete(url); this.timers.delete(timer); }, 10000);
-        this.timers.add(timer);
+        } finally { /* 不写备份 */ }
     }
 
     destroy() {
