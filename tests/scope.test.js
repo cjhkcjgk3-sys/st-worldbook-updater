@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, autoMatchScoped, buildUpdate, cleanEntryName, compactName, listEntries, orderWithPinned, parseNameList, scopeMatch, scopedEntries, splitCategoryPrefix, unmatchedNames, workKeysOf } from '../core.js';
+import { autoMatch, autoMatchScoped, buildUpdate, cleanEntryName, compactName, listEntries, orderWithPinned, parseNameList, pinBlock, scopeMatch, scopedEntries, splitCategoryPrefix, unmatchedNames, workKeysOf } from '../core.js';
 
 const e = (uid, comment, key, content = '旧正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(x => [String(x.uid), x])) });
@@ -173,4 +173,27 @@ test('显示排序没有数量上限：60 个命中散在 300 条里全部连成
     assert.deepEqual(sorted.slice(60).map(({ entry }) => entry.comment), rows.filter((_, i) => i % 5 !== 0).map(x => x.comment));
     // 没有写回任何字段
     assert.equal(Object.values(mother.entries).every(x => x.displayIndex === undefined), true);
+});
+
+test('置顶块：名单为空时只认配对，两侧一致（回归）', () => {
+    // 母本（右）条目编号与目标书（左）故意不同，避免巧合通过
+    const mother = book(e(10, '三月七', ['三月七']), e(11, '爱芮', ['爱芮']), e(12, '姬子', ['姬子']), e(13, '钟离', ['钟离']));
+    const target = book(e(1, '蒙德', ['蒙德']), e(2, '爱芮', ['爱芮']), e(3, '空 旅行者', ['空']), e(4, '钟离', ['钟离']));
+    const pairs = autoMatchScoped(target, mother, [], []);
+    assert.deepEqual(pairs.map(p => `${p.oldId}>${p.newId}`).sort(), ['2>11', '4>13']);
+
+    const leftBlock = pinBlock(listEntries(mother), pairs, 'old', []);
+    const rightBlock = pinBlock(listEntries(mother), pairs, 'new', []);
+    // 关键回归：名单为空时右侧不能把整本都算命中
+    assert.deepEqual(leftBlock, ['2', '4']);
+    assert.deepEqual(rightBlock, ['11', '13']);
+    assert.deepEqual(orderWithPinned(listEntries(target), leftBlock).map(x => x.entry.comment), ['爱芮', '钟离', '蒙德', '空 旅行者']);
+    assert.deepEqual(orderWithPinned(listEntries(mother), rightBlock).map(x => x.entry.comment), ['爱芮', '钟离', '三月七', '姬子']);
+});
+
+test('置顶块：有定点名单时，名单命中且未配对的也置顶', () => {
+    const mother = book(e(0, '爱芮', ['爱芮']), e(1, '钟离', ['钟离']), e(2, '三月七', ['三月七']));
+    const pairs = [];
+    const scoped = ['0', '1'];
+    assert.deepEqual(pinBlock(listEntries(mother), pairs, 'new', scoped), ['0', '1']);
 });

@@ -508,6 +508,23 @@ export function unmatchedNames(book, names, workKeys = []) {
  * 显示用排序：把 blockIds 按给定顺序排到最前，其余条目保持原有顺序。
  * 只影响插件列表的显示，不写回世界书；名单清空或匹配断开即恢复原顺序。
  */
+/**
+ * 置顶块：已配对的条目，加上（有定点名单时）名单命中的条目，顺序按 entries 的现有顺序。
+ * 名单为空时只认配对，不能把整本都当成命中。
+ */
+export function pinBlock(entries, pairs, side, scopedIds = []) {
+    const scoped = new Set((scopedIds || []).map(String));
+    const pairByNew = new Map((pairs || []).map(pair => [String(pair.newId), pair]));
+    const block = [];
+    for (const { id } of entries) {
+        const pair = pairByNew.get(String(id));
+        if (!pair && !scoped.has(String(id))) continue;
+        if (side === 'new') block.push(String(id));
+        else if (pair) block.push(String(pair.oldId));
+    }
+    return block;
+}
+
 export function orderWithPinned(entries, blockIds) {
     const rank = new Map();
     for (const id of blockIds) {

@@ -1,4 +1,4 @@
-const VERSION = '1.7.3';
+const VERSION = '1.7.4';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
 
@@ -626,13 +626,10 @@ export class UpdaterWindow {
         let rows = book ? listEntries(book) : [];
         if (pinning) {
             // 命中 = 名单命中或已配对；块内顺序按母本，母本里先出现的排前面。
-            const block = [];
-            for (const { id: newId } of listEntries(this.newBook)) {
-                const pair = this.pairs.find(item => String(item.newId) === String(newId));
-                if (!this.inScope(newId) && !pair) continue;
-                if (side === 'new') block.push(newId);
-                else if (pair) block.push(pair.oldId);
-            }
+            const scopedIds = this.scopeNames.length
+                ? listEntries(this.newBook).filter(({ id }) => this.inScope(id)).map(({ id }) => id)
+                : [];
+            const block = pinBlock(listEntries(this.newBook), this.pairs, side, scopedIds);
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);
         }
