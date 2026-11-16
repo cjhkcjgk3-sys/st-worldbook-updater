@@ -219,7 +219,39 @@ try {
         await page.locator('[data-page-size="old"]').selectOption('50');
         assert.equal(await page.locator('[data-list="old"] .stwu-entry').count(), 50);
         assert.equal(await page.locator('[data-page-status="old"]').textContent(), '1 / 3');
-        results.push('150 条目分页渲染、跨侧自动翻页定位与每页条数切换通过');
+
+        // Independent drag-resizing of entry window and body window
+        const entryWin = page.locator('.stwu-entry-window'), bodyWin = page.locator('.stwu-body-window');
+        const entryHandle = page.locator('[data-resize-handle="entry"]'), bodyHandle = page.locator('[data-resize-handle="body"]');
+        const hOf = loc => loc.evaluate(el => el.getBoundingClientRect().height);
+        const entryBefore = await hOf(entryWin), bodyBefore = await hOf(bodyWin);
+        const eBox = await entryHandle.boundingBox();
+        await page.mouse.move(eBox.x + eBox.width / 2, eBox.y + eBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(eBox.x + eBox.width / 2, eBox.y + eBox.height / 2 + 120, { steps: 5 });
+        await page.mouse.up();
+        const entryAfter = await hOf(entryWin);
+        assert.ok(entryAfter > entryBefore + 90, JSON.stringify({ entryBefore, entryAfter }));
+        const bodyAfterE = await hOf(bodyWin);
+        assert.ok(bodyAfterE >= 150, JSON.stringify({ entryBefore, entryAfter, bodyBefore, bodyAfterE }));
+
+        await bodyHandle.scrollIntoViewIfNeeded();
+        const bBox = await bodyHandle.boundingBox();
+        await page.mouse.move(bBox.x + bBox.width / 2, bBox.y + bBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(bBox.x + bBox.width / 2, bBox.y + bBox.height / 2 + 100, { steps: 5 });
+        await page.mouse.up();
+        const bodyAfter = await hOf(bodyWin);
+        assert.ok(bodyAfter > bodyAfterE + 80, JSON.stringify({ bodyAfterE, bodyAfter }));
+        assert.ok(Math.abs(await hOf(entryWin) - entryAfter) <= 2);
+        await assertLayout(page);
+
+        // Preset cycle button resets manual inline heights cleanly
+        await page.locator('[data-action="cycle-split"]').click();
+        assert.equal(await entryWin.evaluate(el => el.style.height), '');
+        assert.equal(await bodyWin.evaluate(el => el.style.height), '');
+
+        results.push('150 条目分页、跨侧自动翻页与双窗独立拉伸/复位通过');
         await ctx.close();
     }
 

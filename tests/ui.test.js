@@ -300,11 +300,17 @@ test('sync settings only uses specified source IDs and updates target export mir
     });
 });
 
-test('cycleSplitMode rotates height ratios with a single reused button', () => {
+test('cycleSplitMode rotates height ratios and clears manual heights', () => {
     const { ui, nodes } = setup();
+    const entryPanel = { style: { height: '500px', flex: '0 0 auto', removeProperty(k) { delete this[k]; } } };
+    const bodyPanel = { style: { height: '400px', flex: '0 0 auto', removeProperty(k) { delete this[k]; } } };
+    const origFind = ui.find;
+    ui.find = sel => sel === '.stwu-entry-window' ? entryPanel : sel === '.stwu-body-window' ? bodyPanel : origFind(sel);
     ui.previewOpen = true;
     ui.cycleSplitMode();
     assert.equal(ui.splitMode, 'body');
+    assert.equal(entryPanel.style.height, undefined);
+    assert.equal(bodyPanel.style.height, undefined);
     assert.equal(nodes['.stwu-workspace'].dataset.split, 'body');
     assert.equal(nodes['[data-action="cycle-split"]'].textContent, '高度：正文大');
     ui.cycleSplitMode();

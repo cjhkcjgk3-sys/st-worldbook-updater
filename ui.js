@@ -163,13 +163,14 @@ export class UpdaterWindow {
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="新版每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="新版上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="新版下一页">›</button></div>
                 </section>
               </div>
+              <div class="stwu-resize-handle" data-resize-handle="entry" role="separator" aria-label="拖动调整条目窗口高度" title="上下拖动调整条目窗口高度"></div>
               </section>
               <div class="stwu-hard-divider" role="separator" aria-label="条目窗口与正文窗口分界"></div>
               <section class="stwu-body-window stwu-preview" aria-label="正文对照">
                 <div class="stwu-preview-head">
                   <h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3>
                   <div class="stwu-preview-actions">
-                    <button type="button" class="menu_button stwu-mini-btn" data-action="cycle-split" title="切换条目与正文窗口高度比例">高度：均分</button>
+                    <button type="button" class="menu_button stwu-mini-btn" data-action="cycle-split" title="切换或重置条目与正文窗口高度比例">高度：均分</button>
                     <button type="button" class="menu_button stwu-mini-btn" data-action="close-preview">收起</button>
                   </div>
                 </div>
@@ -183,6 +184,7 @@ export class UpdaterWindow {
                     <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="new">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="new"></pre></details></div>
                   </article>
                 </div>
+                <div class="stwu-resize-handle" data-resize-handle="body" role="separator" aria-label="拖动调整正文窗口高度" title="上下拖动调整正文窗口高度"></div>
               </section>
             </div>
             <footer class="stwu-footer">
@@ -280,6 +282,7 @@ export class UpdaterWindow {
             });
         });
         this.buildSettingsRows();
+        this.bindResizeHandles();
         void this.loadVersion();
         this.selectors(); this.render();
     }
@@ -305,7 +308,46 @@ export class UpdaterWindow {
     setSplitMode(mode) {
         if (!['list', 'balanced', 'body'].includes(mode)) return;
         this.splitMode = mode;
+        for (const cls of ['.stwu-entry-window', '.stwu-body-window']) {
+            const panel = this.find(cls);
+            panel?.style?.removeProperty('height');
+            panel?.style?.removeProperty('flex');
+        }
         this.renderPreview();
+    }
+
+    bindResizeHandles() {
+        for (const area of ['entry', 'body']) {
+            const handle = this.find(`[data-resize-handle="${area}"]`);
+            const panel = this.find(area === 'entry' ? '.stwu-entry-window' : '.stwu-body-window');
+            if (!handle || !panel) continue;
+            let drag = null;
+            this.on(handle, 'pointerdown', event => {
+                if (event.button && event.button !== 0) return;
+                event.preventDefault();
+                const other = this.find(area === 'entry' ? '.stwu-body-window' : '.stwu-entry-window');
+                if (other && this.previewOpen && !other.style.height) {
+                    other.style.flex = '0 0 auto';
+                    other.style.height = `${Math.round(other.getBoundingClientRect().height)}px`;
+                }
+                drag = { id: event.pointerId, startY: event.clientY, startH: panel.getBoundingClientRect().height };
+                handle.setPointerCapture?.(event.pointerId);
+            });
+            this.on(handle, 'pointermove', event => {
+                if (!drag || event.pointerId !== drag.id) return;
+                const minH = area === 'entry' ? 215 : 140;
+                const next = Math.round(Math.max(minH, Math.min(2400, drag.startH + (event.clientY - drag.startY))));
+                panel.style.flex = '0 0 auto';
+                panel.style.height = `${next}px`;
+            });
+            const end = event => {
+                if (!drag || event.pointerId !== drag.id) return;
+                if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+                drag = null;
+            };
+            this.on(handle, 'pointerup', end);
+            this.on(handle, 'pointercancel', end);
+        }
     }
 
     cycleSplitMode() {
