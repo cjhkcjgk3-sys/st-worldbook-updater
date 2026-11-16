@@ -185,3 +185,26 @@ test('置顶与写入组合：两侧命中块按母本顺序排到最前', () =>
     // 注入顺序未被改动
     assert.equal(targetNext.entries['0'].order, undefined);
 });
+
+test('置顶没有数量上限：60 个命中散在 300 条里，全部连成一块', () => {
+    const rows = [];
+    for (let i = 0; i < 300; i++) {
+        const hit = i % 5 === 0;
+        rows.push(e(i, hit ? `角色${i}` : `杂项${i}`, hit ? [`角色${i}`] : [], `正文${i}`));
+    }
+    const mother = book(...rows);
+    const names = rows.filter((_, i) => i % 5 === 0).map(x => x.comment);
+    const block = listEntries(mother).map(({ id }) => id).filter(id => names.includes(mother.entries[id].comment));
+    assert.equal(block.length, 60);
+
+    const next = reorderPinned(mother, block);
+    const order = listEntries(next);
+    assert.equal(order.length, 300);
+    assert.equal(order.slice(0, 60).every(({ entry }) => entry.comment.startsWith('角色')), true);
+    assert.equal(order.slice(60).every(({ entry }) => entry.comment.startsWith('杂项')), true);
+    // displayIndex 连续，其余条目相对顺序不变
+    assert.deepEqual(order.map(({ entry }) => entry.displayIndex), [...Array(300).keys()]);
+    assert.deepEqual(order.slice(60).map(({ entry }) => entry.comment), rows.filter((_, i) => i % 5 !== 0).map(x => x.comment));
+    // 正文一个字都没改
+    assert.deepEqual(Object.values(next.entries).map(x => x.content).sort(), rows.map(x => x.content).sort());
+});
