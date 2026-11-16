@@ -32,7 +32,8 @@ dialog.stwu-dialog.popup {
   border-radius: 10px;
   background: var(--wu-bg);
   box-shadow: 0 0 14px var(--black70a, rgba(0,0,0,.45));
-  overflow: visible;
+  overflow: hidden;
+  resize: vertical;
   text-align: left;
 }
 dialog.stwu-dialog.popup[open] { display: flex; flex-direction: column; }
@@ -113,6 +114,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-pairbar-content { padding: 0 10px 8px; }
 .stwu-pairbar-content select { max-width: 360px; }
 .stwu-footer { flex: 0 0 auto; padding: 5px 10px max(5px,env(safe-area-inset-bottom)); border-top: 1px solid var(--wu-border); }
+.stwu-bottom { padding-right: 18px; }
 .stwu-scope { min-width: 0; }
 .stwu-scope > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; color: var(--wu-em); cursor: pointer; font-size: .8em; }
 .stwu-scope-state { text-align: right; font-size: .9em; }

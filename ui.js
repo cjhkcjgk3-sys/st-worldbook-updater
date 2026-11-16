@@ -166,6 +166,9 @@ export class UpdaterWindow {
             if (!action || this.busy) return;
             if (action === 'close') this.hide();
             if (action === 'toggle-size') {
+                // 手动拖过高度时先清掉内联尺寸，放大/还原才生效
+                this.dialog.style.removeProperty('height');
+                this.dialog.style.removeProperty('width');
                 const expanded = !this.dialog.classList.contains('stwu-expanded');
                 this.dialog.classList.toggle('stwu-expanded', expanded);
                 const button = this.find('[data-action="toggle-size"]');
@@ -274,6 +277,8 @@ export class UpdaterWindow {
     async open() {
         if (this.dialog.open || this.disposed) return;
         this.previousFocus = document.activeElement;
+        this.dialog.style.removeProperty('height');
+        this.dialog.style.removeProperty('width');
         this.dialog.showModal();
         if (!this.books.length) await this.run(() => this.reload());
     }
