@@ -137,6 +137,44 @@ export class WorldbookService {
         } finally { this.busy = false; if (this.disabled) await this.store.close?.(); }
     }
 
+    /** 只改设置时使用：不写备份，直接保存并回读核验。 */
+    async updateDirect(name, expected, next) {
+        if (this.busy) throw new Error('当前操作尚未结束。');
+        this.busy = true;
+        try {
+            validateBook(next);
+            const before = await this.assertCurrent(name, expected);
+            if (canonical(before) === canonical(next)) return { data: before, note: '内容相同，无需写入。' };
+            return await this.saveVerified(name, before, next);
+        } finally { this.busy = false; }
+    }
+
+    async saveVerified(name, before, intended) {
+        if (this.disabled) throw new Error('插件已关闭，尚未写入。');
+        let writeError;
+        try { await this.context().saveWorldInfo(name, clone(intended), true); }
+        catch (error) { writeError = error; }
+        let persisted;
+        try { persisted = await this.read(name); }
+        catch {
+            this.requiresReload = true;
+            throw new Error('保存结果尚未确认。请刷新酒馆后重新选择这本书核验，不要连续重复写入。');
+        }
+        if (canonical(persisted) !== canonical(intended)) {
+            this.requiresReload = true;
+            throw new Error(canonical(persisted) === canonical(before)
+                ? '服务器未保存本次修改，请检查连接并刷新酒馆后重试。'
+                : '保存后的内容与预期不同，已停止后续操作，请刷新酒馆核对。');
+        }
+        let note = writeError ? '文件保存已核验；酒馆刷新通知出错，请刷新页面同步显示。' : '';
+        try {
+            const reload = this.context().reloadWorldInfoEditor;
+            if (typeof reload === 'function') reload(name);
+            else note = note || '文件保存已核验，请手动重新打开世界书编辑器。';
+        } catch { note = note || '文件保存已核验，请手动重新打开世界书编辑器。'; }
+        return { data: persisted, note };
+    }
+
     async restore(name, expectedCurrent, backup) {
         if (this.busy) throw new Error('当前操作尚未结束。');
         if (!backup?.before) throw new Error('没有可恢复的备份。');

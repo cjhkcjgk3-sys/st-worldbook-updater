@@ -253,6 +253,77 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     return { data: validateBook(next), updated, skipped, added, addedPairs };
 }
 
+
+// ---- 条目注入设置（只动设置，不动标题/关键词/正文） ----
+export const SETTINGS_FIELDS = Object.freeze([
+    { key: 'position', label: '注入位置', kind: 'enum', options: [
+        { value: 0, label: '角色前' }, { value: 1, label: '角色后' }, { value: 2, label: '作者注上' },
+        { value: 3, label: '作者注下' }, { value: 4, label: '指定深度' }, { value: 5, label: '示例上' }, { value: 6, label: '示例下' },
+    ] },
+    { key: 'depth', label: '深度', kind: 'number', min: 0, max: 9999 },
+    { key: 'role', label: '插入角色', kind: 'enum', options: [
+        { value: 0, label: '系统' }, { value: 1, label: '用户' }, { value: 2, label: '助手' },
+    ] },
+    { key: 'order', label: '注入顺序', kind: 'number', min: 0, max: 9999 },
+    { key: 'constant', label: '常驻（蓝灯）', kind: 'boolean' },
+    { key: 'excludeRecursion', label: '不可递归', kind: 'boolean' },
+    { key: 'preventRecursion', label: '防止进一步递归', kind: 'boolean' },
+    { key: 'delayUntilRecursion', label: '延迟到递归', kind: 'number', min: 0, max: 999 },
+    { key: 'ignoreBudget', label: '无视回复限额', kind: 'boolean' },
+    { key: 'probability', label: '触发概率', kind: 'number', min: 0, max: 100 },
+]);
+const SETTINGS_KEYS = new Set(SETTINGS_FIELDS.map(field => field.key));
+
+export function isSettingsField(key) { return SETTINGS_KEYS.has(key); }
+
+export function clampSetting(field, value) {
+    if (field.kind === 'boolean') return Boolean(value);
+    const number = Math.trunc(Number(value));
+    if (field.kind === 'enum') {
+        return field.options.some(option => option.value === number) ? number : field.options[0].value;
+    }
+    if (!Number.isFinite(number)) return field.min ?? 0;
+    return Math.max(field.min ?? number, Math.min(field.max ?? number, number));
+}
+
+/** rows: [{ key, mode: 'set'|'add', value }]，只保留核心字段；布尔与枚举不支持 add。 */
+export function buildSettingsPatch(rows) {
+    const patch = {};
+    for (const row of rows || []) {
+        const field = SETTINGS_FIELDS.find(item => item.key === row?.key);
+        if (!field || !row.mode || row.mode === 'keep') continue;
+        if (row.mode === 'add' && field.kind !== 'number') continue;
+        patch[field.key] = {
+            mode: row.mode === 'add' ? 'add' : 'set',
+            value: field.kind === 'boolean' ? row.value === true || row.value === 'true' : Number(row.value),
+        };
+    }
+    return patch;
+}
+
+/** 只改 patch 里点到的字段；标题、关键词、正文不在可改范围内。 */
+export function applySettingsPatch(entry, patch) {
+    const next = { ...entry };
+    for (const [key, op] of Object.entries(patch || {})) {
+        const field = SETTINGS_FIELDS.find(item => item.key === key);
+        if (!field) continue;
+        const current = Number(entry[key]);
+        const raw = op.mode === 'add' ? (Number.isFinite(current) ? current : 0) + Number(op.value) : op.value;
+        next[key] = clampSetting(field, raw);
+    }
+    return next;
+}
+
+/** 取出条目的指定设置值，用于同步到另一本书。 */
+export function pickSettings(entry, keys) {
+    const picked = {};
+    for (const key of keys || []) {
+        if (!SETTINGS_KEYS.has(key) || !own(entry, key)) continue;
+        picked[key] = clone(entry[key]);
+    }
+    return picked;
+}
+
 // 定点名单：对齐 Novel Auto Generator 的世界书命名，只按「名字」做精确匹配。
 // 条目名常见形态：`主角:爱芮`、`角色 - 雷电将军`、`波可娜·费雷尼 (Pulchra Fellini)`，
 // 尾巴偶尔带 `〔2 楼 · 回复 211/247〕` 这类元数据，比较前都要剥掉。

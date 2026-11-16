@@ -114,3 +114,16 @@ test('缺少可选编辑器刷新函数时给出手动打开提示', async () =>
     const result = await f.service.update('目标', initial, updated());
     assert.match(result.note, /手动重新打开/); assert.equal(f.stored.status, 'applied');
 });
+
+test('只改设置时走无备份保存：不写备份，仍回读核验', async () => {
+    const f = fixture(), next = updated();
+    const result = await f.service.updateDirect('目标', initial, next);
+    assert.equal(result.data.entries[0].content, '新正文');
+    assert.equal(f.writes, 1);
+    assert.equal(f.stored, null);
+});
+
+test('无备份保存同样核验：服务器没写进去就报错', async () => {
+    const f = fixture(); f.failWrite = true;
+    await assert.rejects(f.service.updateDirect('目标', initial, updated()), /未保存|预期不同/);
+});

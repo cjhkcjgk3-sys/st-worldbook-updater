@@ -1,4 +1,4 @@
-import { autoMatch, autoMatchScoped, buildUpdate, canonical, cleanEntryName, classifyIncoming, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, canonical, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -129,6 +129,27 @@ export class UpdaterWindow {
                   <details class="stwu-scope-spec"><summary>名单怎么写才一定匹配</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p></details>
                 </div>
               </details>
+              <details class="stwu-settings">
+                <summary><span>条目设置（批量）</span><span class="stwu-settings-state" data-settings-state>只改设置，不动正文</span></summary>
+                <div class="stwu-settings-content">
+                  <div class="stwu-set-scope">
+                    <label>作用范围
+                      <select class="text_pole" data-set-scope>
+                        <option value="scope">定点名单命中</option>
+                        <option value="all">母本全部条目</option>
+                        <option value="checked">列表里勾选的</option>
+                      </select>
+                    </label>
+                    <span class="stwu-set-count" data-set-count></span>
+                  </div>
+                  <div class="stwu-set-rows" data-set-rows></div>
+                  <p class="stwu-set-hint">没改的字段不会写入；点确认才保存，不备份。</p>
+                  <div class="stwu-set-actions">
+                    <button type="button" class="menu_button" data-action="apply-settings">应用到母本</button>
+                    <button type="button" class="menu_button" data-action="sync-settings">同步设置到目标书</button>
+                  </div>
+                </div>
+              </details>
               <div class="stwu-options"><select class="text_pole" data-selection aria-label="勾选操作"><option value="" disabled selected>勾选操作</option><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></select><select class="text_pole" data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
               <div class="stwu-bottom"><details class="stwu-backup"><summary>备份与恢复</summary><div><p class="stwu-backup-info">选择原世界书后查看备份。</p><button type="button" class="menu_button" data-action="download">下载备份</button><button type="button" class="menu_button" data-action="restore">恢复备份</button></div></details><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="menu_button stwu-primary" data-action="apply">替换所选</button></div>
             </footer>
@@ -162,6 +183,8 @@ export class UpdaterWindow {
             if (action === 'file') this.find('[data-file]').click();
             if (action === 'apply') this.run(() => this.apply());
             if (action === 'copy-names') this.run(() => this.copySourceNames());
+            if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
+            if (action === 'sync-settings') this.run(() => this.syncSettingsToTarget());
             if (action === 'restore') this.run(() => this.restore());
             if (action === 'download') this.download();
         });
@@ -246,6 +269,7 @@ export class UpdaterWindow {
                 this.repair(); this.selectors(); this.message(`已载入 ${file.name}，自动配对 ${this.pairs.length} 组。`);
             });
         });
+        this.buildSettingsRows();
         this.selectors(); this.render();
     }
 
@@ -368,6 +392,127 @@ export class UpdaterWindow {
         }
     }
 
+    buildSettingsRows() {
+        const host = this.find('[data-set-rows]');
+        if (!host) return;
+        for (const field of SETTINGS_FIELDS) {
+            const row = element('div', 'stwu-set-row');
+            row.dataset.field = field.key;
+            row.append(element('span', 'stwu-set-label', field.label));
+            const mode = document.createElement('select');
+            mode.className = 'text_pole';
+            mode.dataset.setMode = '';
+            mode.append(new Option('不改', ''), new Option('设为', 'set'));
+            if (field.kind === 'number') mode.append(new Option('调整', 'add'));
+            row.append(mode);
+            let control;
+            if (field.kind === 'enum') {
+                control = document.createElement('select');
+                control.className = 'text_pole';
+                for (const option of field.options) control.append(new Option(option.label, String(option.value)));
+            } else if (field.kind === 'boolean') {
+                control = document.createElement('select');
+                control.className = 'text_pole';
+                control.append(new Option('开', 'true'), new Option('关', 'false'));
+            } else {
+                control = document.createElement('input');
+                control.type = 'number';
+                control.className = 'text_pole';
+                control.min = String(field.min ?? 0);
+                control.max = String(field.max ?? 9999);
+                control.value = String(field.min ?? 0);
+            }
+            control.dataset.setValue = '';
+            control.disabled = true;
+            mode.addEventListener('change', () => { control.disabled = !mode.value; });
+            row.append(control);
+            host.append(row);
+        }
+        this.find('[data-set-scope]')?.addEventListener('change', () => this.renderSettingsInfo());
+    }
+
+    collectSettingsPatch() {
+        const rows = [...this.dialog.querySelectorAll('.stwu-set-row')].map(row => ({
+            key: row.dataset.field,
+            mode: row.querySelector('[data-set-mode]').value,
+            value: row.querySelector('[data-set-value]').value,
+        }));
+        return buildSettingsPatch(rows);
+    }
+
+    settingsSourceIds() {
+        const scope = this.find('[data-set-scope]').value;
+        const all = this.newBook ? listEntries(this.newBook).map(({ id }) => id) : [];
+        if (scope === 'all') return all;
+        if (scope === 'scope') return this.scopeNames.length ? all.filter(id => this.inScope(id)) : [];
+        const chosen = new Set();
+        for (const pair of this.pairs) if (pair.checked) chosen.add(String(pair.newId));
+        for (const [id, selected] of this.newSelection) if (selected) chosen.add(String(id));
+        return all.filter(id => chosen.has(String(id)));
+    }
+
+    settingsPairInScope(pair) {
+        const scope = this.find('[data-set-scope]').value;
+        if (scope === 'scope') return this.scopeNames.length > 0 && this.inScope(pair.newId);
+        if (scope === 'checked') return !!pair.checked;
+        return true;
+    }
+
+    renderSettingsInfo() {
+        const count = this.find('[data-set-count]');
+        if (!count) return;
+        const source = this.settingsSourceIds().length;
+        const pairs = this.pairs.filter(pair => this.settingsPairInScope(pair)).length;
+        count.textContent = `母本 ${source} 条 · 可同步 ${pairs} 条`;
+    }
+
+    async applySettingsToMother() {
+        if (!this.newBook) { this.message('先选择母本世界书。', true); return; }
+        if (this.sourceKind === 'file') { this.message('母本来自 JSON 文件，不能写回；请改为选择母书。', true); return; }
+        const patch = this.collectSettingsPatch();
+        const keys = Object.keys(patch);
+        if (!keys.length) { this.message('先选一个要修改的设置字段。', true); return; }
+        const ids = this.settingsSourceIds();
+        if (!ids.length) { this.message('当前作用范围没有条目。', true); return; }
+        const summary = keys.map(key => SETTINGS_FIELDS.find(field => field.key === key)?.label ?? key).join('、');
+        if (!globalThis.confirm(`将修改母本“${this.newName}”的 ${ids.length} 条条目设置：${summary}。\n只改设置，标题、关键词、正文都不动；不备份。确认保存？`)) return;
+        this.message('正在保存母本设置…');
+        const next = clone(this.newBook);
+        for (const id of ids) next.entries[id] = applySettingsPatch(next.entries[id], patch);
+        const saved = await this.service.updateDirect(this.newName, this.newBook, next);
+        this.newBook = saved.data;
+        this.invalidateIncoming();
+        this.message(`母本已保存：${ids.length} 条设置已更新。${saved.note || ''}`);
+        this.render();
+    }
+
+    async syncSettingsToTarget() {
+        if (!this.oldBook || !this.newBook) { this.message('先选择两侧世界书。', true); return; }
+        const patch = this.collectSettingsPatch();
+        const keys = Object.keys(patch);
+        if (!keys.length) { this.message('先选一个要同步的设置字段。', true); return; }
+        const pairs = this.pairs.filter(pair => this.settingsPairInScope(pair));
+        if (!pairs.length) { this.message('当前范围没有可同步的配对条目。', true); return; }
+        const summary = keys.map(key => SETTINGS_FIELDS.find(field => field.key === key)?.label ?? key).join('、');
+        if (!globalThis.confirm(`将把母本的 ${summary} 同步到目标书“${this.oldName}”的 ${pairs.length} 条已配对条目。\n只改设置，标题、关键词、正文都不动；不备份。确认保存？`)) return;
+        this.message('正在同步设置…');
+        const next = clone(this.oldBook);
+        let synced = 0;
+        for (const pair of pairs) {
+            const picked = pickSettings(this.newBook.entries[pair.newId], keys);
+            if (!Object.keys(picked).length) continue;
+            next.entries[pair.oldId] = { ...next.entries[pair.oldId], ...picked };
+            synced++;
+        }
+        if (!synced) { this.message('母本里没有对应的设置值可同步。', true); return; }
+        const saved = await this.service.updateDirect(this.oldName, this.oldBook, next);
+        this.oldBook = saved.data;
+        this.invalidateIncoming();
+        this.changeCache.clear();
+        this.message(`已同步 ${synced} 条设置到目标书。${saved.note || ''}`);
+        this.render();
+    }
+
     inScope(id) {
         if (!this.scopeNames.length) return true;
         return !!this.newBook?.entries?.[id] && !!scopeMatch(this.newBook.entries[id], this.scopeNames, workKeysOf(this.scopeWorks));
@@ -456,6 +601,7 @@ export class UpdaterWindow {
     render() {
         for (const side of ['old', 'new']) this.renderList(side);
         this.renderControls();
+        this.renderSettingsInfo();
         this.renderPreview();
     }
 
