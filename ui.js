@@ -1,3 +1,5 @@
+const VERSION = '1.7.3';
+
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, scopeMatch, title, unmatchedNames, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
@@ -72,7 +74,7 @@ export class UpdaterWindow {
         this.dialog.innerHTML = `
           <div class="popup-body"><div class="popup-content stwu-layout">
             <header class="stwu-header">
-              <div><h2 id="stwu-heading">世界书更新器</h2><p>左右对照，点击条目后在下方查看正文</p></div>
+              <div><h2 id="stwu-heading">世界书更新器 <span class="stwu-version" data-version></span></h2><p>左右对照，点击条目后在下方查看正文</p></div>
               <div class="stwu-header-actions">
                 <button type="button" class="menu_button stwu-icon-button" data-action="toggle-size" aria-label="放大窗口" aria-expanded="false" title="放大窗口"><i class="fa-solid fa-expand" aria-hidden="true"></i></button>
                 <details class="stwu-header-menu">
@@ -271,6 +273,7 @@ export class UpdaterWindow {
             });
         });
         this.buildSettingsRows();
+        void this.loadVersion();
         this.selectors(); this.render();
     }
 
@@ -383,6 +386,17 @@ export class UpdaterWindow {
         } catch {
             this.message(`当前浏览器不允许自动复制（共 ${names.length} 个条目名）。可改用电脑浏览器，或按右侧列表手动核对。`, true);
         }
+    }
+
+    async loadVersion() {
+        const node = this.find('[data-version]');
+        if (!node) return;
+        try {
+            const response = await fetch(new URL('manifest.json', import.meta.url), { cache: 'no-store' });
+            if (!response.ok) throw new Error('manifest');
+            const manifest = await response.json();
+            if (manifest?.version) node.textContent = 'v' + manifest.version;
+        } catch { node.textContent = VERSION; }
     }
 
     buildSettingsRows() {
@@ -607,19 +621,17 @@ export class UpdaterWindow {
         const search = this.find(`[data-search="${side}"]`).value.trim().toLocaleLowerCase();
         const fragment = document.createDocumentFragment();
         const pairsById = new Map(this.pairs.map((p, i) => [side === 'old' ? p.oldId : p.newId, { pair: p, number: i + 1 }]));
-        const pinning = this.pinMatches && this.scopeNames.length > 0;
+        const pinning = this.pinMatches && (this.pairs.length > 0 || this.scopeNames.length > 0);
         const pinned = new Set();
         let rows = book ? listEntries(book) : [];
         if (pinning) {
-            // 块内顺序按母本：母本里先出现的角色，置顶后也排在前面。
+            // 命中 = 名单命中或已配对；块内顺序按母本，母本里先出现的排前面。
             const block = [];
             for (const { id: newId } of listEntries(this.newBook)) {
-                if (!this.inScope(newId)) continue;
+                const pair = this.pairs.find(item => String(item.newId) === String(newId));
+                if (!this.inScope(newId) && !pair) continue;
                 if (side === 'new') block.push(newId);
-                else {
-                    const pair = this.pairs.find(item => String(item.newId) === String(newId));
-                    if (pair) block.push(pair.oldId);
-                }
+                else if (pair) block.push(pair.oldId);
             }
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);

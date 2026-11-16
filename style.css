@@ -244,3 +244,5 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-set-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .stwu-set-hint { margin: 0; font-size: .72em; color: var(--wu-em); }
 @media (max-width: 680px) { .stwu-set-rows { grid-template-columns: 1fr; } }
+
+.stwu-version { font-size: .62em; font-weight: normal; opacity: .75; margin-left: 4px; }
