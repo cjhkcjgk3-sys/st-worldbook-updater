@@ -1,4 +1,4 @@
-const VERSION = '1.7.4';
+const VERSION = '1.7.5';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, unmatchedNames, workKeysOf } from './core.js';
 
@@ -26,15 +26,19 @@ export class UpdaterWindow {
         this.unpairedNew = new Set();
         this.copySelection = new Set();
         this.settingsSelection = new Set();
+        this.selectionCountsValid = false;
+        this.selectedUpdateCount = 0;
+        this.selectedAdditionCount = 0;
+        this.visibleModeSelectionCount = 0;
         this.pickMode = 'operation';
         this.selectedOld = this.selectedNew = null;
         this.previewOpen = false;
-        this.resizeLimit = null;
         this.resizeDrag = null;
         this.mode = 'content';
         this.fusion = false;
         this.scopeNames = [];
         this.scopeWorks = [];
+        this.scopeWorkKeys = workKeysOf(this.scopeWorks);
         this.pinMatches = true;
         this.busy = false;
         this.disposed = false;
@@ -57,6 +61,10 @@ export class UpdaterWindow {
             const dialogHeight = expanded ? viewportHeight - (mobile ? 0 : 12) : mobile ? viewportHeight - 16 : Math.min(840, viewportHeight - 32);
             const verticalInset = expanded && mobile ? 0 : expanded ? 6 : Math.max(8, (viewportHeight - dialogHeight) / 2);
             this.dialog.style.setProperty('--wu-top', ((viewport?.offsetTop || 0) + verticalInset) + 'px');
+            if (this.dialog.open) {
+                this.syncAreaResize('list');
+                if (this.previewOpen && !this.dialog.classList.contains('stwu-keyboard')) this.syncAreaResize('preview');
+            }
         };
         this.syncViewport = syncViewport;
         this.on(globalThis, 'resize', syncViewport);
@@ -217,14 +225,22 @@ export class UpdaterWindow {
                     if (side !== 'new') return;
                     const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
                     if (event.target.checked) selection.add(id); else selection.delete(id);
-                    this.render();
+                    this.visibleModeSelectionCount += event.target.checked ? 1 : -1;
+                    this.renderSelectionSummary();
                     return;
                 }
+                if (!this.selectionCountsValid) this.refreshSelectionCounts();
                 const pair = this.pairs.find(p => p[side === 'old' ? 'oldId' : 'newId'] === id);
                 if (pair && this.inScope(pair.newId) && this.changed(pair)) {
+                    const wasSelected = pair.checked && this.inScope(pair.newId) && this.changed(pair);
                     pair.checked = event.target.checked; this.pairChecks.set(pair.newId, pair.checked);
-                } else if (side === 'new' && this.addable(id)) this.newSelection.set(id, event.target.checked);
-                this.render();
+                    if (wasSelected !== pair.checked) this.selectedUpdateCount += pair.checked ? 1 : -1;
+                } else if (side === 'new' && this.addable(id)) {
+                    const wasSelected = this.additionChecked(id);
+                    this.newSelection.set(id, event.target.checked);
+                    if (wasSelected !== event.target.checked) this.selectedAdditionCount += event.target.checked ? 1 : -1;
+                }
+                this.renderSelectionSummary();
             });
         }
         this.on(this.find('[data-mode]'), 'change', event => {
@@ -278,7 +294,6 @@ export class UpdaterWindow {
         this.dialog.style.removeProperty('height');
         this.dialog.style.removeProperty('width');
         this.dialog.showModal();
-        this.resizeLimit ??= Math.round(this.dialog.getBoundingClientRect().height * 50);
         this.syncAreaResize('list');
         if (this.previewOpen) this.syncAreaResize('preview');
         if (!this.books.length) await this.run(() => this.reload());
@@ -294,9 +309,9 @@ export class UpdaterWindow {
         const panel = this.find(`[data-resize-panel="${area}"]`);
         const handle = this.find(`[data-resize="${area}"]`);
         const input = this.find(`[data-resize-input="${area}"]`);
-        const minimum = area === 'list' ? 200 : 120;
+        const minimum = this.areaMinimum(area);
         const height = Math.round(panel.getBoundingClientRect().height);
-        const maximum = this.resizeLimit || minimum;
+        const maximum = this.areaResizeLimit(area);
         handle.setAttribute('aria-valuemin', String(minimum));
         handle.setAttribute('aria-valuemax', String(maximum));
         handle.setAttribute('aria-valuenow', String(height));
@@ -305,11 +320,27 @@ export class UpdaterWindow {
 
     setAreaHeight(area, height) {
         if (!Number.isFinite(height)) return;
-        const minimum = area === 'list' ? 200 : 120;
-        const maximum = this.resizeLimit || minimum;
+        const minimum = this.areaMinimum(area);
+        const maximum = this.areaResizeLimit(area);
         const value = Math.round(Math.max(minimum, Math.min(maximum, height)));
+        if (area === 'list') this.find('[data-resize-panel="list"]').style.flexGrow = '0';
         this.find(`[data-resize-panel="${area}"]`).style.height = `${value}px`;
         this.syncAreaResize(area);
+    }
+
+    areaMinimum(area) {
+        const compact = globalThis.matchMedia?.('(max-height: 600px)').matches;
+        return area === 'list' ? (compact ? 120 : 200) : (compact ? 80 : 120);
+    }
+
+    areaResizeLimit(area) {
+        const workspace = this.find('.stwu-workspace');
+        const previewVisible = this.previewOpen && !this.dialog.classList.contains('stwu-keyboard');
+        const bar = Math.round(this.find(`[data-resize="${area}"]`).getBoundingClientRect().height) || 34;
+        const otherMinimum = area === 'list'
+            ? (previewVisible ? this.areaMinimum('preview') + 34 : 0)
+            : this.areaMinimum('list') + 34;
+        return Math.max(this.areaMinimum(area), Math.floor(workspace.clientHeight - bar - otherMinimum));
     }
 
     stopAreaResize() {
@@ -361,7 +392,7 @@ export class UpdaterWindow {
             if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
                 event.preventDefault(); this.setAreaHeight(area, height + (event.key === 'ArrowUp' ? -20 : 20));
             } else if (event.key === 'Home') { event.preventDefault(); this.setAreaHeight(area, 0); }
-            else if (event.key === 'End') { event.preventDefault(); this.setAreaHeight(area, this.resizeLimit); }
+            else if (event.key === 'End') { event.preventDefault(); this.setAreaHeight(area, this.areaResizeLimit(area)); }
         });
         this.on(input, 'change', () => {
             if (input.value === '') this.syncAreaResize(area);
@@ -470,6 +501,7 @@ export class UpdaterWindow {
         if (sameNames && sameWorks) return;
         this.scopeNames = names;
         this.scopeWorks = works;
+        this.scopeWorkKeys = workKeysOf(works);
         this.repair();
         if (names.length) {
             this.fusion = true;
@@ -639,7 +671,7 @@ export class UpdaterWindow {
 
     inScope(id) {
         if (!this.scopeNames.length) return true;
-        return !!this.newBook?.entries?.[id] && !!scopeMatch(this.newBook.entries[id], this.scopeNames, workKeysOf(this.scopeWorks));
+        return !!this.newBook?.entries?.[id] && !!scopeMatch(this.newBook.entries[id], this.scopeNames, this.scopeWorkKeys ?? workKeysOf(this.scopeWorks));
     }
 
     scopeText() {
@@ -721,12 +753,22 @@ export class UpdaterWindow {
 
     select(side, id) {
         if (this.busy) return;
+        const previousOld = this.selectedOld, previousNew = this.selectedNew;
         if (side === 'old') this.selectedOld = id; else this.selectedNew = id;
         this.previewOpen = true;
         const pair = this.pairs.find(p => p[side === 'old' ? 'oldId' : 'newId'] === id);
         if (pair && side === 'old' && !this.selectedNew) this.selectedNew = pair.newId;
         if (pair && side === 'new' && !this.selectedOld) this.selectedOld = pair.oldId;
-        this.render();
+        if (this.dialog) {
+            this.updateSelectedRow('old', previousOld, false);
+            this.updateSelectedRow('new', previousNew, false);
+            this.updateSelectedRow('old', this.selectedOld, true);
+            this.updateSelectedRow('new', this.selectedNew, true);
+            this.renderPreview();
+            this.renderPairControls();
+            this.renderSelectionSummary();
+            if (this.find('.stwu-settings').open && this.find('[data-set-scope]').value === 'current') this.renderSettingsInfo();
+        } else this.render();
         if (pair) {
             const otherSide = side === 'old' ? 'new' : 'old';
             const other = this.find(`[data-list="${otherSide}"]`);
@@ -782,6 +824,14 @@ export class UpdaterWindow {
         this.renderPreview();
     }
 
+    updateSelectedRow(side, id, selected) {
+        if (id == null) return;
+        const row = this.rowElements?.[side]?.get(String(id));
+        if (!row) return;
+        row.classList.toggle('stwu-entry-selected', selected);
+        row.querySelector('.stwu-entry-button')?.setAttribute('aria-pressed', String(selected));
+    }
+
     renderList(side) {
         const book = side === 'old' ? this.oldBook : this.newBook;
         const list = this.find(`[data-list="${side}"]`), scrollTop = list.scrollTop;
@@ -790,6 +840,7 @@ export class UpdaterWindow {
         const focusedTag = focused?.tagName;
         const search = this.find(`[data-search="${side}"]`).value.trim().toLocaleLowerCase();
         const fragment = document.createDocumentFragment();
+        const rowElements = new Map();
         const pairsById = new Map(this.pairs.map((p, i) => [side === 'old' ? p.oldId : p.newId, { pair: p, number: i + 1 }]));
         const pinning = this.pinMatches && this.newBook && (this.pairs.length > 0 || this.scopeNames.length > 0);
         const pinned = new Set();
@@ -837,10 +888,12 @@ export class UpdaterWindow {
             li.classList.toggle('stwu-entry-pinned', pinned.has(id));
             const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + (pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel));
             status.classList.toggle('stwu-paired', !!pair || (side === 'new' && this.addable(id))); button.append(status);
-            li.append(button); fragment.append(li);
+            li.append(button); fragment.append(li); rowElements.set(String(id), li);
         }
         if (!visible) fragment.append(element('li', 'stwu-empty', book ? (Object.keys(book.entries).length ? '没有符合条件的条目' : '这本世界书还没有条目') : '尚未载入世界书'));
         list.replaceChildren(fragment); list.scrollTop = scrollTop;
+        this.rowElements ??= {};
+        this.rowElements[side] = rowElements;
         if (focusedId) list.querySelector(`[data-id="${focusedId}"] ${focusedTag === 'INPUT' ? 'input' : 'button'}`)?.focus({ preventScroll: true });
         this.find(`[data-side="${side}"] .stwu-count`).textContent = book ? `${visible}/${Object.keys(book.entries).length}` : '';
     }
@@ -849,7 +902,6 @@ export class UpdaterWindow {
         for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
         this.find('[data-scope-report]').textContent = this.scopeText();
         this.find('[data-scope-state]').textContent = this.scopeNames.length ? `限定 ${this.scopeNames.length} 个名字` : '整本参与';
-        const selected = this.selectedPairs(), additions = this.selectedAdditions();
         const selectionMenu = this.find('[data-selection]');
         selectionMenu.disabled = this.busy || !this.newBook;
         selectionMenu.querySelector('[value=""]').textContent = ({ operation: '更新/融合勾选', copy: '手工复制勾选', settings: '母本设置勾选' })[this.pickMode];
@@ -857,25 +909,9 @@ export class UpdaterWindow {
             const option = this.find(`[data-selection] [value="${action}"]`);
             option.hidden = !this.fusion || this.pickMode !== 'operation'; option.disabled = option.hidden;
         }
-        const visibleIds = new Set(this.visibleSourceIds());
-        const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
-        const visibleSelected = [...selection].filter(id => visibleIds.has(id)).length;
-        const hiddenSelected = selection.size - visibleSelected;
-        const applyButton = this.find('[data-action="apply"]');
-        this.find('.stwu-selection').textContent = this.busy ? '处理中…' : this.pickMode === 'operation'
-            ? (this.fusion ? `更新 ${selected.length} · 新增 ${additions.length}` : `已选 ${selected.length} 条`)
-            : `${this.pickMode === 'copy' ? '手工复制' : '母本设置'} · 可见 ${visibleSelected} · 隐藏 ${hiddenSelected}`;
-        applyButton.textContent = this.pickMode === 'copy' ? '复制可见勾选' : this.pickMode === 'settings' ? '打开批量设置' : this.fusion ? '融合所选' : '替换所选';
-        applyButton.disabled = this.busy || !!this.service.requiresReload || (this.pickMode === 'copy' ? !visibleSelected || !this.oldBook : this.pickMode === 'settings' ? !this.newBook : !(selected.length + additions.length));
-        const paired = this.pairs.some(p => p.oldId === this.selectedOld || p.newId === this.selectedNew);
-        const menu = this.find('[data-pair-action]');
-        menu.disabled = this.busy || !this.oldBook || !this.newBook;
-        menu.querySelector('[value="pair"]').disabled = !this.selectedOld || !this.selectedNew;
-        menu.querySelector('[value="unpair"]').disabled = !paired;
-        menu.querySelector('[value="unpair-all"]').disabled = !this.pairs.length;
-        const newOption = menu.querySelector('[value="new"]');
-        newOption.disabled = !this.fusion || !this.selectedNew || this.incoming().get(this.selectedNew) !== 'review';
-        newOption.textContent = this.forcedNew.has(this.selectedNew) ? '取消新增标记' : '标记为新条目';
+        this.refreshSelectionCounts();
+        this.renderSelectionSummary();
+        this.renderPairControls();
         for (const side of ['old', 'new']) {
             const pairsById = new Map(this.pairs.map(p => [side === 'old' ? p.oldId : p.newId, p]));
             for (const li of this.dialog.querySelectorAll(`[data-list="${side}"] .stwu-entry`)) {
@@ -886,13 +922,54 @@ export class UpdaterWindow {
         for (const row of this.dialog.querySelectorAll('.stwu-set-row')) {
             row.querySelector('[data-set-value]').disabled = this.busy || !row.querySelector('[data-set-mode]').value;
         }
+    }
+
+    renderSelectionSummary() {
+        let visibleSelected = 0, hiddenSelected = 0;
+        if (this.pickMode === 'operation') {
+            if (!this.selectionCountsValid) this.refreshSelectionCounts();
+        } else {
+            const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
+            visibleSelected = this.visibleModeSelectionCount;
+            hiddenSelected = selection.size - visibleSelected;
+        }
+        const applyButton = this.find('[data-action="apply"]');
+        this.find('.stwu-selection').textContent = this.busy ? '处理中…' : this.pickMode === 'operation'
+            ? (this.fusion ? `更新 ${this.selectedUpdateCount} · 新增 ${this.selectedAdditionCount}` : `已选 ${this.selectedUpdateCount} 条`)
+            : `${this.pickMode === 'copy' ? '手工复制' : '母本设置'} · 可见 ${visibleSelected} · 隐藏 ${hiddenSelected}`;
+        applyButton.textContent = this.pickMode === 'copy' ? '复制可见勾选' : this.pickMode === 'settings' ? '打开批量设置' : this.fusion ? '融合所选' : '替换所选';
+        applyButton.disabled = this.busy || !!this.service.requiresReload || (this.pickMode === 'copy' ? !visibleSelected || !this.oldBook : this.pickMode === 'settings' ? !this.newBook : !(this.selectedUpdateCount + this.selectedAdditionCount));
+    }
+
+    refreshSelectionCounts() {
+        this.selectedUpdateCount = this.selectedPairs().length;
+        this.selectedAdditionCount = this.selectedAdditions().length;
+        this.visibleModeSelectionCount = this.pickMode === 'operation'
+            ? 0
+            : this.find('[data-list="new"]').querySelectorAll('input[type="checkbox"]:checked').length;
+        this.selectionCountsValid = true;
+    }
+
+    renderPairControls() {
+        const paired = this.pairs.some(p => p.oldId === this.selectedOld || p.newId === this.selectedNew);
+        const menu = this.find('[data-pair-action]');
+        menu.disabled = this.busy || !this.oldBook || !this.newBook;
+        menu.querySelector('[value="pair"]').disabled = !this.selectedOld || !this.selectedNew;
+        menu.querySelector('[value="unpair"]').disabled = !paired;
+        menu.querySelector('[value="unpair-all"]').disabled = !this.pairs.length;
+        const newOption = menu.querySelector('[value="new"]');
+        newOption.disabled = !this.fusion || !this.selectedNew || this.incoming().get(this.selectedNew) !== 'review';
+        newOption.textContent = this.forcedNew.has(this.selectedNew) ? '取消新增标记' : '标记为新条目';
         this.find('.stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目' : '点击两边条目可手动配对';
     }
 
     renderPreview() {
         const workspace = this.find('.stwu-workspace');
         workspace.dataset.previewOpen = String(this.previewOpen);
-        if (this.previewOpen && this.resizeLimit && !this.dialog.classList.contains('stwu-keyboard')) this.syncAreaResize('preview');
+        if (!this.dialog.classList.contains('stwu-keyboard')) {
+            this.syncAreaResize('list');
+            if (this.previewOpen) this.syncAreaResize('preview');
+        }
         const entries = {
             old: this.oldBook?.entries[this.selectedOld],
             new: this.newBook?.entries[this.selectedNew],
