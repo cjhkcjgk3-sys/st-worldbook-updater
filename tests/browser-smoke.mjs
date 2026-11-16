@@ -119,10 +119,11 @@ async function openTool(page, cls) {
 }
 
 async function assertLayout(page) {
+    await page.locator('[data-action="replace"]').scrollIntoViewIfNeeded();
     const metrics = await page.evaluate(() => {
         const d = document.querySelector('.stwu-dialog'), panels = [...document.querySelectorAll('.stwu-pane')].map(x => x.getBoundingClientRect());
         const replaceBtn = document.querySelector('[data-action="replace"]').getBoundingClientRect();
-        const dRect = d.getBoundingClientRect();
+        const scroller = document.querySelector('.stwu-layout'), dRect = d.getBoundingClientRect();
         const entryWin = document.querySelector('.stwu-entry-window').getBoundingClientRect();
         const bodyWin = document.querySelector('.stwu-body-window').getBoundingClientRect();
         const previewOpen = document.querySelector('.stwu-workspace').dataset.previewOpen === 'true';
@@ -130,6 +131,7 @@ async function assertLayout(page) {
             viewport: innerWidth,
             width: dRect.width,
             overflow: d.scrollWidth > d.clientWidth + 1,
+            overflowY: getComputedStyle(scroller).overflowY,
             nativePopup: d.classList.contains('popup') && !!d.querySelector('.popup-body .popup-content'),
             paneWidths: panels.map(x => x.width),
             visiblePanes: panels.filter(x => x.width > 0).length,
@@ -141,6 +143,7 @@ async function assertLayout(page) {
         };
     });
     assert.ok(!metrics.overflow, JSON.stringify(metrics));
+    assert.equal(metrics.overflowY, 'auto', JSON.stringify(metrics));
     assert.ok(metrics.width <= metrics.viewport + 1, JSON.stringify(metrics));
     assert.equal(metrics.nativePopup, true, JSON.stringify(metrics));
     assert.equal(metrics.visiblePanes, 2, JSON.stringify(metrics));
@@ -263,6 +266,7 @@ try {
             Object.defineProperty(visualViewport, 'height', { value: 380, configurable: true });
             visualViewport.dispatchEvent(new Event('resize'));
         });
+        await page.locator('[data-action="replace"]').scrollIntoViewIfNeeded();
         const metrics = await page.evaluate(() => ({
             compact: document.querySelector('.stwu-dialog').classList.contains('stwu-keyboard'),
             listHeight: document.querySelector('.stwu-list').clientHeight,
