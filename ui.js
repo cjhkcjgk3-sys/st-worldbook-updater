@@ -227,10 +227,12 @@ export class UpdaterWindow {
             this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
             this.on(this.find(`[data-search="${side}"]`), 'input', () => { this.page[side] = 1; this.renderList(side); this.renderControls(); });
             this.on(this.find(`[data-page-size="${side}"]`), 'change', event => { this.pageSize[side] = Number(event.target.value) || 25; this.page[side] = 1; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls(); });
-            this.on(this.find(`[data-page-step^="${side}:"]`), 'click', event => {
-                const step = Number(event.currentTarget.dataset.pageStep.split(':')[1]);
-                this.page[side] += step; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls();
-            });
+            for (const btn of this.dialog.querySelectorAll(`[data-page-step^="${side}:"]`)) {
+                this.on(btn, 'click', event => {
+                    const step = Number(event.currentTarget.dataset.pageStep.split(':')[1]);
+                    this.page[side] += step; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls();
+                });
+            }
             const list = this.find(`[data-list="${side}"]`);
             this.on(list, 'click', event => {
                 const button = event.target.closest('.stwu-entry-button');
@@ -271,8 +273,8 @@ export class UpdaterWindow {
             event.target.value = '';
             if (file) this.run(async () => {
                 if (file.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，请先拆分世界书。');
-                if (this.hasManualDecisions() && !globalThis.confirm('更换来源会清除当前的人工配对和勾选。确认更换？')) return;
                 const book = parseBook(await file.text());
+                if (this.hasManualDecisions() && !globalThis.confirm('更换来源会清除当前的人工配对和勾选。确认更换？')) return;
                 this.newBook = book; this.newName = file.name; this.sourceKind = 'file';
                 this.repair(true); this.selectors(); this.message(`已载入 ${file.name}，自动配对 ${this.pairs.length} 组。`);
             });
