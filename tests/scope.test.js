@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, autoMatchScoped, buildUpdate, cleanEntryName, compactName, parseNameList, scopeMatch, scopedEntries, splitCategoryPrefix, unmatchedNames, workKeysOf } from '../core.js';
+import { autoMatch, autoMatchScoped, buildUpdate, cleanEntryName, compactName, listEntries, parseNameList, reorderPinned, scopeMatch, scopedEntries, splitCategoryPrefix, unmatchedNames, workKeysOf } from '../core.js';
 
 const e = (uid, comment, key, content = '旧正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(x => [String(x.uid), x])) });
@@ -133,4 +133,55 @@ test('冒号前缀只在左侧是分类名时才剥；名字里的冒号保持�
     assert.equal(splitCategoryPrefix('Re:从零开始'), '');
     assert.equal(cleanEntryName('Re:从零开始'), 'Re:从零开始');
     assert.ok(hit('爱芮', ['爱芮']));
+});
+
+test('置顶：命中块按母本顺序排到最前，其余保持相对顺序', () => {
+    // 母本里四个原神角色原来排在第 1、3、6、7 位
+    const mother = book(
+        e(0, '爱芮', [], '1'), e(1, '别的作品甲', [], '2'), e(2, '南宫羽', [], '3'),
+        e(3, '别的作品乙', [], '4'), e(4, '别的作品丙', [], '5'), e(5, '维琳娜·艾嘉德', [], '6'),
+        e(6, '零号·安比', [], '7'),
+    );
+    const block = ['0', '2', '5', '6'];
+    const next = reorderPinned(mother, block);
+    const order = listEntries(next).map(({ entry }) => entry.comment);
+    assert.deepEqual(order, ['爱芮', '南宫羽', '维琳娜·艾嘉德', '零号·安比', '别的作品甲', '别的作品乙', '别的作品丙']);
+    assert.deepEqual([0, 1, 2, 3, 4, 5, 6], listEntries(next).map(({ entry }) => entry.displayIndex));
+    // 只动 displayIndex，不动注入顺序
+    assert.equal(next.entries['0'].displayIndex, 0);
+    assert.equal(mother.entries['0'].displayIndex, undefined); // 原对象未被修改
+    assert.deepEqual(Object.values(next.entries).map(x => x.content), Object.values(mother.entries).map(x => x.content));
+});
+
+test('置顶时未知 id 被忽略，重复 id 只算一次', () => {
+    const b = book(e(0, '甲', []), e(1, '乙', []));
+    const next = reorderPinned(b, ['1', '999', '1', '0']);
+    assert.deepEqual(listEntries(next).map(({ id }) => id), ['1', '0']);
+});
+
+test('置顶与写入组合：两侧命中块按母本顺序排到最前', () => {
+    const target = book(e(0, '甲', []), e(1, '爱芮', ['爱芮'], '旧'), e(2, '乙', []), e(3, '南宫羽', ['南宫羽'], '旧'));
+    const mother = book(
+        e(0, '丙', []), e(1, '丁', []),
+        e(2, '爱芮', ['爱芮'], '新一'), e(3, '南宫羽', ['南宫羽'], '新二'), e(4, '新的角色', ['新的角色'], '新三'),
+    );
+    const names = ['爱芮', '南宫羽', '新的角色'];
+    const pairs = autoMatchScoped(target, mother, names);
+    const paired = new Set(pairs.map(p => p.newId));
+    const additions = scopedEntries(mother, names).filter(id => !paired.has(id));
+    const result = buildUpdate(target, mother, pairs, 'content', { merge: true, additions });
+
+    const addedByNew = new Map(result.addedPairs.map(p => [String(p.newId), p.oldId]));
+    const blockNew = listEntries(mother).map(x => x.id).filter(id => pairs.some(p => p.newId === id) || addedByNew.has(id));
+    const targetBlock = blockNew.map(id => pairs.find(p => p.newId === id)?.oldId ?? addedByNew.get(id));
+
+    const targetNext = reorderPinned(result.data, targetBlock);
+    const motherNext = reorderPinned(mother, blockNew);
+
+    assert.deepEqual(listEntries(targetNext).map(({ entry }) => entry.comment), ['爱芮', '南宫羽', '新的角色', '甲', '乙']);
+    assert.deepEqual(listEntries(motherNext).map(({ entry }) => entry.comment), ['爱芮', '南宫羽', '新的角色', '丙', '丁']);
+    // 内容变化仍然生效
+    assert.equal(targetNext.entries[listEntries(targetNext)[0].id].content, '新一');
+    // 注入顺序未被改动
+    assert.equal(targetNext.entries['0'].order, undefined);
 });

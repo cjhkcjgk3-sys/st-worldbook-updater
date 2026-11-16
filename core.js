@@ -434,6 +434,25 @@ export function unmatchedNames(book, names, workKeys = []) {
     return names.filter(name => !Object.values(book.entries).some(entry => scopeMatch(entry, [name], workKeys)));
 }
 
+/**
+ * 把 blockIds 按给定顺序排到最前，其余条目保持原有相对顺序。
+ * 只改 displayIndex（列表位置），不动 order（注入顺序）和正文。
+ */
+export function reorderPinned(book, blockIds) {
+    validateBook(book);
+    const block = [];
+    const seen = new Set();
+    for (const id of blockIds) {
+        const key = String(id);
+        if (seen.has(key) || !own(book.entries, key)) continue;
+        seen.add(key); block.push(key);
+    }
+    const rest = listEntries(book).map(({ id }) => id).filter(id => !seen.has(id));
+    const next = clone(book);
+    [...block, ...rest].forEach((id, index) => { next.entries[id].displayIndex = index; });
+    return next;
+}
+
 // 名单内的来源条目优先配对“证据更强”的原书条目：标题+完整关键词 > 只对上其中一项。
 // 同一原书条目被多条来源争抢且证据相同时放弃，交给人工配对。
 export function autoMatchScoped(oldBook, newBook, names, workKeys = []) {
