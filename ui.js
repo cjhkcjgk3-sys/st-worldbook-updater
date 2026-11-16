@@ -1,4 +1,4 @@
-const VERSION = '1.7.5';
+const VERSION = '1.8.0';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, unmatchedNames, workKeysOf } from './core.js';
 
@@ -17,25 +17,27 @@ export class UpdaterWindow {
         this.oldName = this.newName = '';
         this.sourceKind = 'book';
         this.pairs = [];
+        this.pairBySource = new Map();
+        this.pairByTarget = new Map();
         this.changeCache = new Map();
         this.incomingCache = null;
+        // newSelection is the one checkbox state shared by Copy, Replace, and checked-item settings.
         this.newSelection = new Map();
-        this.forcedNew = new Set();
         this.pairChecks = new Map();
         this.unpairedOld = new Set();
         this.unpairedNew = new Set();
-        this.copySelection = new Set();
-        this.settingsSelection = new Set();
         this.selectionCountsValid = false;
         this.selectedUpdateCount = 0;
-        this.selectedAdditionCount = 0;
-        this.visibleModeSelectionCount = 0;
-        this.pickMode = 'operation';
+        this.selectedCopyCount = 0;
+        this.visibleCopyCount = 0;
+        this.pageSize = { old: 25, new: 25 };
+        this.page = { old: 1, new: 1 };
+        this.filteredRows = { old: [], new: [] };
+        this.visibleSourceSet = new Set();
         this.selectedOld = this.selectedNew = null;
+        this.lastSelectedSide = null;
         this.previewOpen = false;
-        this.resizeDrag = null;
         this.mode = 'content';
-        this.fusion = false;
         this.scopeNames = [];
         this.scopeWorks = [];
         this.scopeWorkKeys = workKeysOf(this.scopeWorks);
@@ -61,10 +63,6 @@ export class UpdaterWindow {
             const dialogHeight = expanded ? viewportHeight - (mobile ? 0 : 12) : mobile ? viewportHeight - 16 : Math.min(840, viewportHeight - 32);
             const verticalInset = expanded && mobile ? 0 : expanded ? 6 : Math.max(8, (viewportHeight - dialogHeight) / 2);
             this.dialog.style.setProperty('--wu-top', ((viewport?.offsetTop || 0) + verticalInset) + 'px');
-            if (this.dialog.open) {
-                this.syncAreaResize('list');
-                if (this.previewOpen && !this.dialog.classList.contains('stwu-keyboard')) this.syncAreaResize('preview');
-            }
         };
         this.syncViewport = syncViewport;
         this.on(globalThis, 'resize', syncViewport);
@@ -99,62 +97,29 @@ export class UpdaterWindow {
               </div>
             </header>
             <div class="stwu-notice" role="status" aria-live="polite">先选择原世界书，再选择新版或打开 JSON 文件。</div>
-            <div class="stwu-workspace" data-preview-open="false">
-              <div class="stwu-panels" data-resize-panel="list">
-                <section class="stwu-pane" data-side="old" aria-label="原世界书">
-                  <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
-                  <select class="text_pole" aria-label="选择原世界书" data-book="old"></select>
-                  <div class="stwu-source-line">原书独有条目会保留</div>
-                  <input class="text_pole" type="search" data-search="old" aria-label="搜索原世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
-                  <ol class="stwu-list" data-list="old" aria-label="原世界书条目"></ol>
-                </section>
-                <section class="stwu-pane" data-side="new" aria-label="新版世界书">
-                  <div class="stwu-pane-head"><h3>新版世界书</h3><span class="stwu-count"></span></div>
-                  <select class="text_pole" aria-label="选择新版世界书" data-book="new"></select>
-                  <div class="stwu-source-line"><button type="button" class="menu_button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
-                  <input class="text_pole" type="search" data-search="new" aria-label="搜索新版世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
-                  <ol class="stwu-list" data-list="new" aria-label="新版世界书条目"></ol>
-                </section>
-              </div>
-              <div class="stwu-resize-row"><div class="stwu-splitter" role="separator" aria-label="调整条目区域高度" aria-orientation="horizontal" tabindex="0" data-resize="list" title="调整条目区域高度"><span></span></div><label class="stwu-size-input"><input type="number" inputmode="numeric" step="1" aria-label="条目区域高度（像素）" data-resize-input="list"> px</label></div>
-              <section class="stwu-preview" aria-label="正文对照" data-resize-panel="preview">
-                <div class="stwu-preview-head"><h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3><button type="button" class="menu_button stwu-icon-button" data-action="collapse-preview" aria-label="收起正文对照" title="收起正文对照"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button></div>
-                <div class="stwu-preview-grid">
-                  <article class="stwu-preview-pane" data-preview-side="old">
-                    <h4>原书 · <span data-preview-title="old">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="old"></p>
-                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="old">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="old"></pre></details></div>
-                  </article>
-                  <article class="stwu-preview-pane" data-preview-side="new">
-                    <h4>新版 · <span data-preview-title="new">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="new"></p>
-                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="new">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="new"></pre></details></div>
-                  </article>
-                </div>
-              </section>
-              <div class="stwu-resize-row stwu-preview-resizer"><div class="stwu-splitter" role="separator" aria-label="调整正文区域高度" aria-orientation="horizontal" tabindex="0" data-resize="preview" title="调整正文区域高度"><span></span></div><label class="stwu-size-input"><input type="number" inputmode="numeric" step="1" aria-label="正文区域高度（像素）" data-resize-input="preview"> px</label></div>
-            </div>
-            <details class="stwu-pairbar">
-              <summary><i class="fa-solid fa-link" aria-hidden="true"></i><span>配对与条目操作</span><span class="stwu-pairhint">点击两边条目可手动配对</span></summary>
-              <div class="stwu-pairbar-content"><select class="text_pole" data-pair-action aria-label="配对操作"><option value="" disabled selected>配对操作</option><option value="pair">配对所选</option><option value="unpair">解除所选配对</option><option value="unpair-all">解除全部配对</option><option value="auto">重新自动匹配（保留人工决定）</option><option value="auto-reset">重置配对决定并重新匹配</option><option value="new">标记为新条目</option></select></div>
-            </details>
-            <footer class="stwu-footer">
-              <details class="stwu-scope">
-                <summary><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
-                <div class="stwu-scope-content">
-                  <label for="stwu-scope-input">每行一个名字；名单限定处理范围，搜索仅改变显示</label>
+            <div class="stwu-tools" aria-label="配对、名单与条目设置">
+              <details class="stwu-tool stwu-pairbar">
+                <summary class="menu_button"><i class="fa-solid fa-link" aria-hidden="true"></i><span>配对与条目</span></summary>
+                <div class="stwu-tool-content stwu-pairbar-content"><select class="text_pole" data-pair-action aria-label="配对操作"><option value="" disabled selected>配对操作</option><option value="pair">配对两侧所选条目</option><option value="unpair">解除所选配对</option><option value="unpair-all">解除全部配对</option><option value="auto">重新自动匹配（保留人工决定）</option><option value="auto-reset">重置配对决定并重新匹配</option></select><span class="stwu-pairhint">点击两侧条目后，可在此配对</span></div>
+              </details>
+              <details class="stwu-tool stwu-scope">
+                <summary class="menu_button"><i class="fa-solid fa-bullseye" aria-hidden="true"></i><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
+                <div class="stwu-tool-content stwu-scope-content">
+                  <label for="stwu-scope-input">名单限定替换范围；搜索只改变列表显示。</label>
                   <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
                   <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
                   <p class="stwu-scope-report" data-scope-report role="status"></p>
-                  <details class="stwu-scope-spec"><summary>名单怎么写才一定匹配</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p></details>
+                  <details class="stwu-scope-spec"><summary>名单格式说明</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>没命中的名字只会列在报告里，不会参与替换。</p></details>
                 </div>
               </details>
-              <details class="stwu-settings">
-                <summary><span>条目设置（批量）</span><span class="stwu-settings-state" data-settings-state>只改设置，不动正文</span></summary>
-                <div class="stwu-settings-content">
+              <details class="stwu-tool stwu-settings">
+                <summary class="menu_button"><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>条目设置</span><span class="stwu-settings-state" data-settings-state>批量设置</span></summary>
+                <div class="stwu-tool-content stwu-settings-content">
                   <div class="stwu-set-scope">
                     <label>作用范围
                       <select class="text_pole" data-set-scope>
                         <option value="current">当前查看的母本条目</option>
-                        <option value="checked">母本设置勾选的条目</option>
+                        <option value="checked">当前勾选的母本条目</option>
                         <option value="scope">定点名单命中</option>
                         <option value="all">母本全部条目</option>
                       </select>
@@ -169,14 +134,53 @@ export class UpdaterWindow {
                   </div>
                 </div>
               </details>
-              <div class="stwu-options"><select class="text_pole" data-selection aria-label="勾选模式与操作"><option value="" disabled selected>更新/融合勾选</option><optgroup label="切换勾选模式"><option value="operation-mode">更新/融合勾选</option><option value="copy-mode">手工复制勾选</option><option value="settings-mode">母本设置勾选</option></optgroup><optgroup label="批量勾选"><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></optgroup></select><select class="text_pole" data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
-              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="menu_button stwu-primary" data-action="apply">替换所选</button></div>
+            </div>
+            <div class="stwu-selection-bar"><button type="button" class="menu_button" data-action="toggle-selection" aria-pressed="false">全选当前结果</button><span class="stwu-selection stwu-selection-compact" data-selection-summary="compact" aria-live="polite"></span></div>
+            <div class="stwu-workspace" data-preview-open="false">
+              <section class="stwu-entry-window" aria-label="条目对照窗口">
+              <div class="stwu-panels">
+                <section class="stwu-pane" data-side="old" aria-label="原世界书">
+                  <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
+                  <select class="text_pole" aria-label="选择原世界书" data-book="old"></select>
+                  <div class="stwu-source-line">原书独有条目会保留</div>
+                  <input class="text_pole" type="search" data-search="old" aria-label="搜索原世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <ol class="stwu-list" data-list="old" aria-label="原世界书条目"></ol>
+                  <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="old" aria-label="原书每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="old:-1" aria-label="原书上一页">‹</button><span data-page-status="old">0 / 0</span><button type="button" class="menu_button" data-page-step="old:1" aria-label="原书下一页">›</button></div>
+                </section>
+                <section class="stwu-pane" data-side="new" aria-label="新版世界书">
+                  <div class="stwu-pane-head"><h3>新版世界书</h3><span class="stwu-count"></span></div>
+                  <select class="text_pole" aria-label="选择新版世界书" data-book="new"></select>
+                  <div class="stwu-source-line"><button type="button" class="menu_button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
+                  <input class="text_pole" type="search" data-search="new" aria-label="搜索新版世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <ol class="stwu-list" data-list="new" aria-label="新版世界书条目"></ol>
+                  <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="新版每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="新版上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="新版下一页">›</button></div>
+                </section>
+              </div>
+              </section>
+              <div class="stwu-hard-divider" role="separator" aria-label="条目窗口与正文窗口分界"></div>
+              <section class="stwu-body-window stwu-preview" aria-label="正文对照">
+                <div class="stwu-preview-head"><h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3><span class="stwu-pairhint">点击条目后自动显示</span></div>
+                <div class="stwu-preview-grid">
+                  <article class="stwu-preview-pane" data-preview-side="old">
+                    <h4>原书 · <span data-preview-title="old">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="old"></p>
+                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="old">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="old"></pre></details></div>
+                  </article>
+                  <article class="stwu-preview-pane" data-preview-side="new">
+                    <h4>新版 · <span data-preview-title="new">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="new"></p>
+                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="new">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="new"></pre></details></div>
+                  </article>
+                </div>
+              </section>
+            </div>
+            <footer class="stwu-footer">
+              <label class="stwu-replace-scope">替换范围<select class="text_pole" data-mode aria-label="替换范围"><option value="content">仅正文</option><option value="full">完整条目</option></select></label>
+              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button></div>
             </footer>
           </div></div>`;
         document.body.append(this.dialog);
-        this.find('.stwu-scope').open = globalThis.matchMedia?.('(min-width: 681px) and (min-height: 521px)').matches ?? true;
-        const headerMenu = this.find('.stwu-header-menu');
-        this.on(headerMenu, 'toggle', () => this.dialog.classList.toggle('stwu-tools-expanded', headerMenu.open));
+        for (const tool of this.dialog.querySelectorAll('.stwu-tool')) this.on(tool, 'toggle', () => {
+            if (tool.open) for (const other of this.dialog.querySelectorAll('.stwu-tool')) if (other !== tool) other.open = false;
+        });
         this.on(this.dialog, 'cancel', event => { event.preventDefault(); if (!this.busy) this.hide(); });
         this.on(this.dialog, 'click', event => {
             const action = event.target.closest('[data-action]')?.dataset.action;
@@ -195,24 +199,23 @@ export class UpdaterWindow {
                 button.querySelector('i').className = `fa-solid ${expanded ? 'fa-compress' : 'fa-expand'}`;
                 this.syncViewport();
             }
-            if (action === 'collapse-preview') {
-                this.previewOpen = false;
-                this.renderPreview();
-            }
             if (action === 'reload') { this.find('.stwu-header-menu').open = false; this.run(() => this.reload()); }
             if (action === 'file') this.find('[data-file]').click();
-            if (action === 'apply') {
-                if (this.pickMode === 'settings') { this.find('.stwu-settings').open = true; this.renderSettingsInfo(); }
-                else this.run(() => this.pickMode === 'copy' ? this.copySelected() : this.apply());
-            }
+            if (action === 'replace') this.run(() => this.apply());
+            if (action === 'copy') this.run(() => this.copySelected());
+            if (action === 'toggle-selection') this.toggleFilteredSelection();
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
             if (action === 'sync-settings') this.run(() => this.syncSettingsToTarget());
         });
-        for (const area of ['list', 'preview']) this.bindAreaResizer(area);
         for (const side of ['old', 'new']) {
             this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
-            this.on(this.find(`[data-search="${side}"]`), 'input', () => { this.renderList(side); this.renderControls(); });
+            this.on(this.find(`[data-search="${side}"]`), 'input', () => { this.page[side] = 1; this.renderList(side); this.renderControls(); });
+            this.on(this.find(`[data-page-size="${side}"]`), 'change', event => { this.pageSize[side] = Number(event.target.value) || 25; this.page[side] = 1; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls(); });
+            this.on(this.find(`[data-page-step^="${side}:"]`), 'click', event => {
+                const step = Number(event.currentTarget.dataset.pageStep.split(':')[1]);
+                this.page[side] += step; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls();
+            });
             const list = this.find(`[data-list="${side}"]`);
             this.on(list, 'click', event => {
                 const button = event.target.closest('.stwu-entry-button');
@@ -221,55 +224,41 @@ export class UpdaterWindow {
             this.on(list, 'change', event => {
                 if (!event.target.matches('input[type="checkbox"]')) return;
                 const id = event.target.closest('[data-id]').dataset.id;
-                if (this.pickMode !== 'operation') {
-                    if (side !== 'new') return;
-                    const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
-                    if (event.target.checked) selection.add(id); else selection.delete(id);
-                    this.visibleModeSelectionCount += event.target.checked ? 1 : -1;
-                    this.renderSelectionSummary();
-                    return;
-                }
                 if (!this.selectionCountsValid) this.refreshSelectionCounts();
-                const pair = this.pairs.find(p => p[side === 'old' ? 'oldId' : 'newId'] === id);
-                if (pair && this.inScope(pair.newId) && this.changed(pair)) {
-                    const wasSelected = pair.checked && this.inScope(pair.newId) && this.changed(pair);
-                    pair.checked = event.target.checked; this.pairChecks.set(pair.newId, pair.checked);
-                    if (wasSelected !== pair.checked) this.selectedUpdateCount += pair.checked ? 1 : -1;
-                } else if (side === 'new' && this.addable(id)) {
-                    const wasSelected = this.additionChecked(id);
-                    this.newSelection.set(id, event.target.checked);
-                    if (wasSelected !== event.target.checked) this.selectedAdditionCount += event.target.checked ? 1 : -1;
+                const pair = side === 'old' ? this.pairByTarget.get(id) : this.pairBySource.get(id);
+                const sourceId = pair?.newId ?? (side === 'new' ? id : null);
+                if (sourceId == null) return;
+                const wasSelected = this.isEntryChecked(sourceId);
+                this.newSelection.set(sourceId, event.target.checked);
+                if (pair) { pair.checked = event.target.checked; this.pairChecks.set(sourceId, event.target.checked); }
+                const change = event.target.checked ? 1 : -1;
+                if (wasSelected !== event.target.checked) {
+                    this.selectedCopyCount += change;
+                    if (this.visibleSourceSet.has(sourceId)) this.visibleCopyCount += change;
+                    if (pair && this.inScope(pair.newId) && this.changed(pair)) this.selectedUpdateCount += change;
                 }
+                this.updateSelectionRows(sourceId, event.target.checked);
+                this.selectionCountsValid = true;
                 this.renderSelectionSummary();
+                if (this.find('.stwu-settings').open && this.find('[data-set-scope]').value === 'checked') this.renderSettingsInfo();
             });
         }
         this.on(this.find('[data-mode]'), 'change', event => {
-            this.fusion = event.target.value.startsWith('merge-');
-            this.mode = event.target.value.endsWith('full') ? 'full' : 'content';
-            this.message(this.fusion ? '融合模式：配对项替换，勾选的新增项复制；名单命中的待处理项也可复制。' : '更新模式：只更新已配对条目，不新增。');
+            this.mode = event.target.value === 'full' ? 'full' : 'content';
+            this.changeCache.clear(); this.selectionCountsValid = false;
+            this.message(this.mode === 'content' ? '替换范围：只替换正文，保留目标条目的设置。' : '替换范围：同步标题、关键词、正文和条目设置。');
             this.render();
         });
         this.on(this.find('[data-scope]'), 'change', () => this.applyScope());
         this.on(this.find('[data-scope-pin]'), 'change', event => { this.pinMatches = event.target.checked; this.render(); });
-        this.on(this.find('[data-selection]'), 'change', event => {
-            const action = event.target.value; event.target.value = '';
-            if (action.endsWith('-mode')) { this.setPickMode(action.slice(0, -5)); return; }
-            this.setSelection(action);
-        });
         this.on(this.find('[data-pair-action]'), 'change', event => {
             const action = event.target.value; event.target.value = '';
             if (action === 'pair') this.manualPair();
             if (action === 'unpair') this.unpair();
             if (action === 'unpair-all') this.unpairAll();
             if (action === 'auto') { this.repair(); this.message(`已重新自动匹配，共 ${this.pairs.length} 组；保留人工配对、解除和勾选。`); this.render(); }
-            if (action === 'auto-reset' && globalThis.confirm('将清除人工配对、解除记录及更新/新增勾选，重新自动匹配；手工复制和设置勾选不变。确认？')) {
+            if (action === 'auto-reset' && globalThis.confirm('将清除人工配对、解除记录及当前勾选，重新自动匹配。确认？')) {
                 this.resetPairDecisions(); this.repair(); this.message(`已重置配对决定，自动匹配 ${this.pairs.length} 组。`); this.render();
-            }
-            if (action === 'new' && this.selectedNew) {
-                const id = this.selectedNew;
-                if (this.forcedNew.has(id)) { this.forcedNew.delete(id); this.newSelection.set(id, false); }
-                else if (this.incoming().get(id) === 'review') { this.forcedNew.add(id); this.newSelection.set(id, true); }
-                this.message(this.forcedNew.has(id) ? '已标记为新条目，执行融合时会分配新编号追加。' : '已取消新增标记。'); this.render();
             }
         });
         this.on(this.find('[data-file]'), 'change', event => {
@@ -277,7 +266,7 @@ export class UpdaterWindow {
             event.target.value = '';
             if (file) this.run(async () => {
                 if (file.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，请先拆分世界书。');
-                if (this.hasManualDecisions() && !globalThis.confirm('更换来源会清除当前的人工配对、勾选和手工复制选择。确认更换？')) return;
+                if (this.hasManualDecisions() && !globalThis.confirm('更换来源会清除当前的人工配对和勾选。确认更换？')) return;
                 const book = parseBook(await file.text());
                 this.newBook = book; this.newName = file.name; this.sourceKind = 'file';
                 this.repair(true); this.selectors(); this.message(`已载入 ${file.name}，自动配对 ${this.pairs.length} 组。`);
@@ -294,110 +283,12 @@ export class UpdaterWindow {
         this.dialog.style.removeProperty('height');
         this.dialog.style.removeProperty('width');
         this.dialog.showModal();
-        this.syncAreaResize('list');
-        if (this.previewOpen) this.syncAreaResize('preview');
         if (!this.books.length) await this.run(() => this.reload());
     }
 
     hide() {
-        this.stopAreaResize();
         this.dialog.close();
         this.previousFocus?.focus?.();
-    }
-
-    syncAreaResize(area) {
-        const panel = this.find(`[data-resize-panel="${area}"]`);
-        const handle = this.find(`[data-resize="${area}"]`);
-        const input = this.find(`[data-resize-input="${area}"]`);
-        const minimum = this.areaMinimum(area);
-        const height = Math.round(panel.getBoundingClientRect().height);
-        const maximum = this.areaResizeLimit(area);
-        handle.setAttribute('aria-valuemin', String(minimum));
-        handle.setAttribute('aria-valuemax', String(maximum));
-        handle.setAttribute('aria-valuenow', String(height));
-        input.min = String(minimum); input.max = String(maximum); input.value = String(height);
-    }
-
-    setAreaHeight(area, height) {
-        if (!Number.isFinite(height)) return;
-        const minimum = this.areaMinimum(area);
-        const maximum = this.areaResizeLimit(area);
-        const value = Math.round(Math.max(minimum, Math.min(maximum, height)));
-        if (area === 'list') this.find('[data-resize-panel="list"]').style.flexGrow = '0';
-        this.find(`[data-resize-panel="${area}"]`).style.height = `${value}px`;
-        this.syncAreaResize(area);
-    }
-
-    areaMinimum(area) {
-        const compact = globalThis.matchMedia?.('(max-height: 600px)').matches;
-        return area === 'list' ? (compact ? 120 : 200) : (compact ? 80 : 120);
-    }
-
-    areaResizeLimit(area) {
-        const workspace = this.find('.stwu-workspace');
-        const previewVisible = this.previewOpen && !this.dialog.classList.contains('stwu-keyboard');
-        const bar = Math.round(this.find(`[data-resize="${area}"]`).getBoundingClientRect().height) || 34;
-        const otherMinimum = area === 'list'
-            ? (previewVisible ? this.areaMinimum('preview') + 34 : 0)
-            : this.areaMinimum('list') + 34;
-        return Math.max(this.areaMinimum(area), Math.floor(workspace.clientHeight - bar - otherMinimum));
-    }
-
-    stopAreaResize() {
-        if (!this.resizeDrag) return;
-        cancelAnimationFrame(this.resizeDrag.frame);
-        this.resizeDrag = null;
-    }
-
-    bindAreaResizer(area) {
-        const handle = this.find(`[data-resize="${area}"]`);
-        const input = this.find(`[data-resize-input="${area}"]`);
-        const scroller = this.find('.stwu-layout');
-        const updateDrag = () => {
-            const drag = this.resizeDrag;
-            if (drag) this.setAreaHeight(area, drag.height + drag.y - drag.startY + scroller.scrollTop - drag.scrollTop);
-        };
-        const autoScroll = () => {
-            const drag = this.resizeDrag;
-            if (!drag) return;
-            const bounds = scroller.getBoundingClientRect();
-            const top = Math.max(0, bounds.top), bottom = Math.min(globalThis.innerHeight, bounds.bottom);
-            const edge = Math.min(56, Math.max(0, (bottom - top) / 4));
-            const speed = drag.y > bottom - edge ? Math.min(24, (drag.y - (bottom - edge)) / 2)
-                : drag.y < top + edge ? -Math.min(24, ((top + edge) - drag.y) / 2) : 0;
-            const before = scroller.scrollTop;
-            if (speed) scroller.scrollTop += speed;
-            if (scroller.scrollTop !== before) updateDrag();
-            drag.frame = requestAnimationFrame(autoScroll);
-        };
-        this.on(handle, 'pointerdown', event => {
-            if (event.pointerType === 'mouse' && event.button !== 0) return;
-            event.preventDefault();
-            this.stopAreaResize();
-            handle.setPointerCapture(event.pointerId);
-            this.resizeDrag = { area, pointerId: event.pointerId, height: this.find(`[data-resize-panel="${area}"]`).getBoundingClientRect().height,
-                startY: event.clientY, y: event.clientY, scrollTop: scroller.scrollTop, frame: requestAnimationFrame(autoScroll) };
-        });
-        this.on(handle, 'pointermove', event => {
-            if (!this.resizeDrag || !handle.hasPointerCapture(event.pointerId)) return;
-            this.resizeDrag.y = event.clientY; updateDrag();
-        });
-        for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) this.on(handle, type, event => {
-            if (this.resizeDrag?.area !== area || this.resizeDrag.pointerId !== event.pointerId) return;
-            if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-            this.stopAreaResize();
-        });
-        this.on(handle, 'keydown', event => {
-            const height = this.find(`[data-resize-panel="${area}"]`).getBoundingClientRect().height;
-            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-                event.preventDefault(); this.setAreaHeight(area, height + (event.key === 'ArrowUp' ? -20 : 20));
-            } else if (event.key === 'Home') { event.preventDefault(); this.setAreaHeight(area, 0); }
-            else if (event.key === 'End') { event.preventDefault(); this.setAreaHeight(area, this.areaResizeLimit(area)); }
-        });
-        this.on(input, 'change', () => {
-            if (input.value === '') this.syncAreaResize(area);
-            else this.setAreaHeight(area, Number(input.value));
-        });
     }
 
     message(text, error = false) {
@@ -447,7 +338,7 @@ export class UpdaterWindow {
         const name = value.startsWith('book:') ? value.slice(5) : '';
         const previous = side === 'old' ? this.oldName : (this.sourceKind === 'book' ? this.newName : null);
         if (name === previous) return;
-        if (this.hasManualDecisions() && !globalThis.confirm('更换世界书会清除当前的人工配对、勾选和手工复制选择。确认更换？')) { this.selectors(); return; }
+        if (this.hasManualDecisions() && !globalThis.confirm('更换世界书会清除当前的人工配对和勾选。确认更换？')) { this.selectors(); return; }
         if (side === 'old') { this.oldBook = null; this.oldName = name; }
         else { this.newBook = null; this.newName = name; this.sourceKind = 'book'; }
         this.repair(true); this.render();
@@ -461,22 +352,25 @@ export class UpdaterWindow {
     }
 
     hasManualDecisions() {
-        return !!(this.pairChecks.size || this.newSelection.size || this.forcedNew.size || this.unpairedOld.size || this.unpairedNew.size || this.copySelection.size || this.settingsSelection.size || this.pairs.some(pair => pair.reason === '手动配对'));
+        return !!(this.pairChecks.size || this.newSelection.size || this.unpairedOld.size || this.unpairedNew.size || this.pairs.some(pair => pair.reason === '手动配对'));
     }
 
     resetPairDecisions() {
-        this.pairs = []; this.pairChecks.clear(); this.newSelection.clear(); this.forcedNew.clear();
+        this.pairs = []; this.pairChecks.clear(); this.newSelection.clear();
         this.unpairedOld.clear(); this.unpairedNew.clear();
     }
 
     repair(reset = false) {
         if (reset) {
-            this.resetPairDecisions(); this.copySelection.clear(); this.settingsSelection.clear();
+            this.resetPairDecisions();
             this.selectedOld = this.selectedNew = null;
+            this.lastSelectedSide = null;
         }
         this.changeCache.clear();
         this.invalidateIncoming();
-        if (!this.oldBook || !this.newBook) { this.pairs = []; return; }
+        this.selectionCountsValid = false;
+        this.page.old = this.page.new = 1;
+        if (!this.oldBook || !this.newBook) { this.pairs = []; this.syncPairIndex(); return; }
         const oldEntries = this.oldBook.entries, newEntries = this.newBook.entries;
         const previous = new Map(this.pairs.map(pair => [pair.newId, pair]));
         const manual = this.pairs.filter(pair => (pair.reason === '手动配对' || pair.reason === '本次新增') && oldEntries[pair.oldId] && newEntries[pair.newId]);
@@ -485,11 +379,12 @@ export class UpdaterWindow {
         const proposals = [...scoped, ...autoMatch(this.oldBook, this.newBook)];
         const pairs = [...manual];
         for (const pair of proposals) {
-            if (usedOld.has(pair.oldId) || usedNew.has(pair.newId) || this.unpairedOld.has(pair.oldId) || this.unpairedNew.has(pair.newId) || this.forcedNew.has(pair.newId) || this.newSelection.get(pair.newId) === true) continue;
-            pair.checked = this.pairChecks.get(pair.newId) ?? this.newSelection.get(pair.newId) ?? previous.get(pair.newId)?.checked ?? pair.checked;
+            if (usedOld.has(pair.oldId) || usedNew.has(pair.newId) || this.unpairedOld.has(pair.oldId) || this.unpairedNew.has(pair.newId)) continue;
+            pair.checked = this.pairChecks.get(pair.newId) ?? this.newSelection.get(pair.newId) ?? previous.get(pair.newId)?.checked ?? (this.inScope(pair.newId) && this.changed(pair));
             usedOld.add(pair.oldId); usedNew.add(pair.newId); pairs.push(pair);
         }
         this.pairs = pairs;
+        this.syncPairIndex();
         if (!oldEntries[this.selectedOld]) this.selectedOld = null;
         if (!newEntries[this.selectedNew]) this.selectedNew = null;
     }
@@ -503,11 +398,7 @@ export class UpdaterWindow {
         this.scopeWorks = works;
         this.scopeWorkKeys = workKeysOf(works);
         this.repair();
-        if (names.length) {
-            this.fusion = true;
-            this.find('[data-mode]').value = `merge-${this.mode}`;
-        }
-        this.message(this.scopeText() || '未设置定点名单：整本参与替换与复制。');
+        this.message(this.scopeText() || '未设置定点名单：整本参与替换。复制所选条目不受名单限制。');
         this.render();
         for (const side of ['old', 'new']) this.find(`[data-list="${side}"]`).scrollTop = 0;
     }
@@ -595,7 +486,7 @@ export class UpdaterWindow {
         if (scope === 'all') return all;
         if (scope === 'scope') return this.scopeNames.length ? all.filter(id => this.inScope(id)) : [];
         if (scope === 'current') return all.filter(id => id === this.selectedNew);
-        return all.filter(id => this.settingsSelection.has(id));
+        return all.filter(id => this.isEntryChecked(id));
     }
 
     settingsPairInScope(pair, ids = new Set(this.settingsSourceIds())) {
@@ -633,6 +524,7 @@ export class UpdaterWindow {
         this.newBook = saved.data;
         if (this.oldName === this.newName) this.oldBook = saved.data;
         this.changeCache.clear(); this.invalidateIncoming();
+        this.selectionCountsValid = false;
         this.message(`母本已保存：${ids.length} 条设置已更新。${saved.note || ''}`);
         this.render();
     }
@@ -665,6 +557,7 @@ export class UpdaterWindow {
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.invalidateIncoming();
         this.changeCache.clear();
+        this.selectionCountsValid = false;
         this.message(`已同步 ${synced} 条设置到目标书。${saved.note || ''}`);
         this.render();
     }
@@ -679,17 +572,18 @@ export class UpdaterWindow {
         const workKeys = workKeysOf(this.scopeWorks);
         const hit = Object.values(this.newBook.entries).filter(entry => scopeMatch(entry, this.scopeNames, workKeys)).length;
         const paired = new Set(this.pairs.filter(pair => this.inScope(pair.newId)).map(pair => pair.newId));
-        let addable = 0, blocked = 0, duplicate = 0;
+        let unpaired = 0, blocked = 0, duplicate = 0;
         for (const [id, state] of this.incoming()) {
             if (!this.inScope(id) || paired.has(id)) continue;
-            if (state === 'new' || state === 'review') addable++;
-            else if (state === 'duplicate') duplicate++;
+            unpaired++;
+            if (state === 'duplicate') duplicate++;
             if (state === 'review') blocked++;
         }
         const missing = unmatchedNames(this.newBook, this.scopeNames, workKeys);
-        const parts = [`名单 ${this.scopeNames.length} 个${this.scopeWorks.length ? `（作品 ${this.scopeWorks.length} 个）` : ''} → 母本命中 ${hit} 条`, `已配对 ${paired.size} 条（替换）`, `可新增 ${addable} 条（复制）`];
-        if (blocked) parts.push(`其中 ${blocked} 条待核对，将按勾选复制`);
-        if (duplicate) parts.push(`完整重复 ${duplicate} 条（普通融合跳过，可手工复制）`);
+        const parts = [`名单 ${this.scopeNames.length} 个${this.scopeWorks.length ? `（作品 ${this.scopeWorks.length} 个）` : ''} → 命中 ${hit} 条`, `范围内已配对 ${paired.size} 组，可参与替换`];
+        if (unpaired) parts.push(`${unpaired} 条未配对，需手动配对后才能替换`);
+        if (blocked) parts.push(`其中 ${blocked} 条待核对`);
+        if (duplicate) parts.push(`另有 ${duplicate} 条内容重复`);
         if (missing.length) parts.push(`名单未找到 ${missing.length} 个：${missing.slice(0, 6).join('、')}${missing.length > 6 ? '…' : ''}`);
         return parts.join('；');
     }
@@ -699,47 +593,43 @@ export class UpdaterWindow {
         if (!this.oldBook || !this.newBook) return new Map();
         return this.incomingCache ||= classifyIncoming(this.oldBook, this.newBook, this.pairs);
     }
-    addable(id) {
-        const state = this.incoming().get(id);
-        return this.fusion && this.inScope(id) && (state === 'new' || (state === 'review' && (this.scopeNames.length > 0 || this.forcedNew.has(id) || this.newSelection.get(id) === true)));
+    syncPairIndex() {
+        this.pairBySource = new Map(this.pairs.map(pair => [pair.newId, pair]));
+        this.pairByTarget = new Map(this.pairs.map(pair => [pair.oldId, pair]));
     }
-    additionChecked(id) { return this.newSelection.get(id) ?? !this.unpairedNew.has(id); }
-    selectedAdditions() { return [...this.incoming().keys()].filter(id => this.addable(id) && this.additionChecked(id)); }
+    pairForSource(id) { return this.pairBySource.get(id); }
+    isEntryChecked(id) {
+        if (this.newSelection.has(id)) return this.newSelection.get(id) === true;
+        return !!this.pairForSource(id)?.checked;
+    }
+    selectedCopyIds() { return this.newBook ? listEntries(this.newBook).filter(({ id }) => this.isEntryChecked(id)).map(({ id }) => id) : []; }
 
     visibleSourceIds() {
-        const search = this.find('[data-search="new"]').value.trim().toLocaleLowerCase();
-        return this.newBook ? listEntries(this.newBook).filter(({ entry }) => !search || [entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search)).map(({ id }) => id) : [];
+        return this.filteredRows.new.map(({ id }) => id);
     }
 
-    setPickMode(mode) {
-        if (!['operation', 'copy', 'settings'].includes(mode)) return;
-        this.pickMode = mode;
-        if (mode === 'settings') this.find('[data-set-scope]').value = 'checked';
-        const labels = {
-            operation: '更新/融合勾选：名单限定操作范围；搜索只影响显示。',
-            copy: '手工复制勾选：仅右侧手动勾选的当前可见条目会复制；配对、名单和待处理状态不会阻拦。',
-            settings: '母本设置勾选：在右侧选择条目，再打开批量设置；与更新、复制勾选互不影响。',
-        };
-        this.message(labels[mode]); this.render();
+    updateSelectionRows(sourceId, checked) {
+        const pair = this.pairForSource(sourceId);
+        for (const [side, id] of [['new', sourceId], ['old', pair?.oldId]]) {
+            if (id == null) continue;
+            const row = this.rowElements?.[side]?.get(String(id));
+            const input = row?.querySelector('input[type="checkbox"]');
+            if (input) input.checked = checked;
+        }
     }
 
-    setSelection(action) {
-        if (this.pickMode !== 'operation') {
-            const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
-            if (action === 'all') for (const id of this.visibleSourceIds()) selection.add(id);
-            if (action === 'none') selection.clear();
-            this.message(action === 'all' ? '已勾选右侧当前搜索显示的条目，未改变隐藏项。' : '已清空此模式的全部勾选，包括搜索隐藏项。');
-            this.render(); return;
+    toggleFilteredSelection() {
+        const rows = this.filteredRows.new;
+        if (!rows.length) return;
+        const select = !rows.every(({ id }) => this.isEntryChecked(id));
+        const pairs = new Map(this.pairs.map(pair => [pair.newId, pair]));
+        for (const { id } of rows) {
+            this.newSelection.set(id, select);
+            const pair = pairs.get(id);
+            if (pair) { pair.checked = select; this.pairChecks.set(id, select); }
         }
-        const wantUpdates = action === 'all' || action === 'updates', wantAdditions = action === 'all' || action === 'additions';
-        for (const pair of this.pairs) if (this.inScope(pair.newId)) {
-            pair.checked = wantUpdates && this.changed(pair); this.pairChecks.set(pair.newId, pair.checked);
-        }
-        for (const id of this.incoming().keys()) if (this.inScope(id) && this.addable(id)) this.newSelection.set(id, wantAdditions);
-        const filtered = !!(this.find('[data-search="old"]').value || this.find('[data-search="new"]').value);
-        const labels = { all: '已勾选当前范围内所有可执行项；完整重复条目未选。', none: '已取消当前范围内的勾选。', updates: '已仅勾选当前范围内需要更新的配对。', additions: '已仅勾选当前范围内可新增的条目。' };
-        const scoped = this.scopeNames.length ? '当前只处理定点名单内的人物。' : '';
-        this.message(labels[action] + scoped + (filtered && action !== 'none' ? '本次勾选也包含搜索隐藏的条目。' : ''));
+        this.selectionCountsValid = false;
+        this.message(select ? `已勾选新版列表当前搜索结果，共 ${rows.length} 条。` : `已取消当前搜索结果的勾选，共 ${rows.length} 条。`);
         this.render();
     }
 
@@ -757,8 +647,10 @@ export class UpdaterWindow {
         if (side === 'old') this.selectedOld = id; else this.selectedNew = id;
         this.previewOpen = true;
         const pair = this.pairs.find(p => p[side === 'old' ? 'oldId' : 'newId'] === id);
-        if (pair && side === 'old' && !this.selectedNew) this.selectedNew = pair.newId;
-        if (pair && side === 'new' && !this.selectedOld) this.selectedOld = pair.oldId;
+        const followPair = this.lastSelectedSide === null || this.lastSelectedSide === side;
+        if (pair && followPair && side === 'old') this.selectedNew = pair.newId;
+        if (pair && followPair && side === 'new') this.selectedOld = pair.oldId;
+        this.lastSelectedSide = side;
         if (this.dialog) {
             this.updateSelectedRow('old', previousOld, false);
             this.updateSelectedRow('new', previousNew, false);
@@ -771,16 +663,26 @@ export class UpdaterWindow {
         } else this.render();
         if (pair) {
             const otherSide = side === 'old' ? 'new' : 'old';
-            const other = this.find(`[data-list="${otherSide}"]`);
             const counterpart = side === 'old' ? pair.newId : pair.oldId;
-            const counterpartRow = other.querySelector(`[data-id="${counterpart}"]`);
             const selectedCounterpart = side === 'old' ? this.selectedNew : this.selectedOld;
+            const targetIndex = this.filteredRows[otherSide].findIndex(row => row.id === counterpart);
+            if (targetIndex >= 0 && (followPair || selectedCounterpart === counterpart)) {
+                const targetPage = Math.floor(targetIndex / this.pageSize[otherSide]) + 1;
+                if (targetPage !== this.page[otherSide]) {
+                    this.page[otherSide] = targetPage;
+                    this.renderList(otherSide);
+                    this.renderControls();
+                }
+            }
+            const other = this.find(`[data-list="${otherSide}"]`);
+            const counterpartRow = other.querySelector(`[data-id="${counterpart}"]`);
             if (selectedCounterpart === counterpart && counterpartRow) {
                 const row = counterpartRow.getBoundingClientRect(), list = other.getBoundingClientRect();
                 if (row.top < list.top) other.scrollTop += row.top - list.top;
                 else if (row.bottom > list.bottom) other.scrollTop += row.bottom - list.bottom;
             }
-            this.message(`现有配对依据：${pair.reason}。${selectedCounterpart === counterpart ? (this.changed(pair) ? '有变化，正文已在下方显示。' : '当前替换范围内没有变化。') : '两侧选中的条目不同于现有配对，可手动重新配对。'}${counterpartRow ? '' : '配对的对侧条目被搜索隐藏，搜索条件未更改。'}`);
+            const location = targetIndex < 0 ? '配对的对侧条目不在当前搜索结果中。' : counterpartRow ? '' : `配对的对侧条目位于第 ${Math.floor(targetIndex / this.pageSize[otherSide]) + 1} 页。`;
+            this.message(`现有配对依据：${pair.reason}。${selectedCounterpart === counterpart ? (this.changed(pair) ? '有变化，正文已在下方显示。' : '当前替换范围内没有变化。') : '两侧选中的条目不同于现有配对，可手动重新配对。'}${location}`);
         }
     }
 
@@ -792,13 +694,18 @@ export class UpdaterWindow {
             if (manualConflicts.length && !globalThis.confirm(`新的手动配对将解除 ${manualConflicts.length} 组之前手动决定的配对。确认继续？`)) return;
             const remaining = this.pairs.filter(pair => pair.oldId !== this.selectedOld && pair.newId !== this.selectedNew);
             this.pairs = pairManually(remaining, this.selectedOld, this.selectedNew);
+            this.syncPairIndex();
             for (const pair of displaced) {
                 if (pair.oldId !== this.selectedOld) this.unpairedOld.add(pair.oldId);
                 if (pair.newId !== this.selectedNew) this.unpairedNew.add(pair.newId);
+                if (!this.newSelection.has(pair.newId)) this.newSelection.set(pair.newId, pair.checked);
             }
             this.unpairedOld.delete(this.selectedOld); this.unpairedNew.delete(this.selectedNew);
-            this.pairChecks.set(this.selectedNew, true);
-            this.forcedNew.delete(this.selectedNew); this.newSelection.delete(this.selectedNew); this.invalidateIncoming();
+            const selected = this.inScope(this.selectedNew);
+            const pair = this.pairForSource(this.selectedNew);
+            if (pair) pair.checked = selected;
+            this.pairChecks.set(this.selectedNew, selected);
+            this.newSelection.set(this.selectedNew, selected); this.invalidateIncoming(); this.selectionCountsValid = false;
             const changed = displaced.length ? `已解除 ${displaced.length} 组冲突配对。` : '';
             this.message((this.inScope(this.selectedNew) ? '已手动配对，正文已在下方并排显示。' : '已手动配对；此条在名单外，不参与当前批量写入。') + changed); this.render();
         } catch (error) { this.message(error.message, true); }
@@ -806,14 +713,21 @@ export class UpdaterWindow {
 
     unpair() {
         const removed = this.pairs.filter(p => p.oldId === this.selectedOld || p.newId === this.selectedNew);
-        for (const pair of removed) { this.unpairedOld.add(pair.oldId); this.unpairedNew.add(pair.newId); }
+        for (const pair of removed) {
+            this.unpairedOld.add(pair.oldId); this.unpairedNew.add(pair.newId);
+            if (!this.newSelection.has(pair.newId)) this.newSelection.set(pair.newId, pair.checked);
+        }
         this.pairs = this.pairs.filter(p => !removed.includes(p));
-        this.invalidateIncoming(); this.message('已解除所选配对；重新自动匹配时会保留此决定。'); this.render();
+        this.syncPairIndex();
+        this.invalidateIncoming(); this.selectionCountsValid = false; this.message('已解除所选配对；重新自动匹配时会保留此决定。'); this.render();
     }
 
     unpairAll() {
-        for (const pair of this.pairs) { this.unpairedOld.add(pair.oldId); this.unpairedNew.add(pair.newId); }
-        this.pairs = []; this.invalidateIncoming();
+        for (const pair of this.pairs) {
+            this.unpairedOld.add(pair.oldId); this.unpairedNew.add(pair.newId);
+            if (!this.newSelection.has(pair.newId)) this.newSelection.set(pair.newId, pair.checked);
+        }
+        this.pairs = []; this.syncPairIndex(); this.invalidateIncoming(); this.selectionCountsValid = false;
         this.message('已解除全部配对；要恢复自动配对，请选择重置配对决定。'); this.render();
     }
 
@@ -854,69 +768,72 @@ export class UpdaterWindow {
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);
         }
-        let visible = 0;
-        for (const { id, entry } of rows) {
-            if (search && ![entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search)) continue;
-            visible++;
+        const filtered = rows.filter(({ entry }) => !search || [entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search));
+        this.filteredRows[side] = filtered;
+        if (side === 'new') this.visibleSourceSet = new Set(filtered.map(({ id }) => id));
+        const pageCount = Math.max(1, Math.ceil(filtered.length / this.pageSize[side]));
+        this.page[side] = Math.max(1, Math.min(pageCount, this.page[side]));
+        const start = (this.page[side] - 1) * this.pageSize[side];
+        const pageRows = filtered.slice(start, start + this.pageSize[side]);
+        if (side === 'new') this.visibleCopyCount = filtered.reduce((count, { id }) => count + Number(this.isEntryChecked(id)), 0);
+        for (const { id, entry } of pageRows) {
             const linked = pairsById.get(id), pair = linked?.pair, changed = pair && this.changed(pair);
             const li = element('li', 'stwu-entry wi-card-entry'); li.dataset.id = id;
             li.classList.toggle('stwu-entry-selected', id === (side === 'old' ? this.selectedOld : this.selectedNew));
             {
                 const label = element('label', 'stwu-entry-check');
-                const outScope = pair ? !this.inScope(pair.newId) : side === 'new' && !this.inScope(id);
-                const adding = side === 'new' && !pair && this.addable(id);
                 const check = element('input'); check.type = 'checkbox';
-                if (this.pickMode === 'operation') {
-                    check.checked = pair ? !!(changed && pair.checked) : adding && this.additionChecked(id);
-                    check.disabled = this.busy || outScope || !(changed || adding);
-                    check.setAttribute('aria-label', `${outScope ? '名单外，不参与' : pair ? '更新' : side === 'new' ? '新增' : '保留'}：${title(entry)}`);
-                } else {
-                    const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
-                    check.checked = side === 'new' && selection.has(id);
-                    check.disabled = this.busy || side !== 'new';
-                    check.setAttribute('aria-label', `${side !== 'new' ? '仅母本可选' : this.pickMode === 'copy' ? '手工复制' : '母本设置'}：${title(entry)}`);
-                }
+                check.checked = side === 'new' ? this.isEntryChecked(id) : !!pair && this.isEntryChecked(pair.newId);
+                check.disabled = this.busy || (side === 'old' && !pair);
+                check.setAttribute('aria-label', `${side === 'old' && !pair ? '原书独有条目，不能选择来源' : '选择条目'}：${title(entry)}`);
                 label.append(check); li.append(label);
             }
             const button = element('button', 'menu_button stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
             button.setAttribute('aria-pressed', String(li.classList.contains('stwu-entry-selected')));
             button.append(element('span', 'stwu-entry-title', title(entry)));
             const state = side === 'new' ? this.incoming().get(id) : null;
-            const unpairedLabel = side === 'old' ? '保留'
-                : side === 'new' && !this.inScope(id) ? '名单外'
-                : state === 'duplicate' ? '相同条目已跳过' : state === 'review' ? (this.forcedNew.has(id) ? '已标记新增' : '待处理') : state === 'new' ? '新条目' : '待载入原书';
+            const unpairedLabel = side === 'old' ? '原书独有 · 保留'
+                : !this.inScope(id) ? '名单外'
+                : state === 'duplicate' ? '内容重复 · 可复制'
+                : state === 'review' ? '待核对 · 可复制'
+                : state === 'new' ? '未配对 · 可复制' : '待载入原书';
             li.classList.toggle('stwu-entry-pinned', pinned.has(id));
             const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + (pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel));
-            status.classList.toggle('stwu-paired', !!pair || (side === 'new' && this.addable(id))); button.append(status);
+            status.classList.toggle('stwu-paired', !!pair); button.append(status);
             li.append(button); fragment.append(li); rowElements.set(String(id), li);
         }
-        if (!visible) fragment.append(element('li', 'stwu-empty', book ? (Object.keys(book.entries).length ? '没有符合条件的条目' : '这本世界书还没有条目') : '尚未载入世界书'));
+        if (!filtered.length) fragment.append(element('li', 'stwu-empty', book ? (Object.keys(book.entries).length ? '没有符合条件的条目' : '这本世界书还没有条目') : '尚未载入世界书'));
         list.replaceChildren(fragment); list.scrollTop = scrollTop;
         this.rowElements ??= {};
         this.rowElements[side] = rowElements;
         if (focusedId) list.querySelector(`[data-id="${focusedId}"] ${focusedTag === 'INPUT' ? 'input' : 'button'}`)?.focus({ preventScroll: true });
-        this.find(`[data-side="${side}"] .stwu-count`).textContent = book ? `${visible}/${Object.keys(book.entries).length}` : '';
+        this.find(`[data-side="${side}"] .stwu-count`).textContent = book ? `${filtered.length}/${Object.keys(book.entries).length}` : '';
+        this.find(`[data-page-status="${side}"]`).textContent = `${filtered.length ? this.page[side] : 0} / ${filtered.length ? pageCount : 0}`;
     }
 
     renderControls() {
         for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
         this.find('[data-scope-report]').textContent = this.scopeText();
         this.find('[data-scope-state]').textContent = this.scopeNames.length ? `限定 ${this.scopeNames.length} 个名字` : '整本参与';
-        const selectionMenu = this.find('[data-selection]');
-        selectionMenu.disabled = this.busy || !this.newBook;
-        selectionMenu.querySelector('[value=""]').textContent = ({ operation: '更新/融合勾选', copy: '手工复制勾选', settings: '母本设置勾选' })[this.pickMode];
-        for (const action of ['updates', 'additions']) {
-            const option = this.find(`[data-selection] [value="${action}"]`);
-            option.hidden = !this.fusion || this.pickMode !== 'operation'; option.disabled = option.hidden;
+        if (!this.selectionCountsValid) this.refreshSelectionCounts();
+        for (const side of ['old', 'new']) {
+            this.find(`[data-page-size="${side}"]`).value = String(this.pageSize[side]);
+            const pages = Math.max(1, Math.ceil(this.filteredRows[side].length / this.pageSize[side]));
+            this.find(`[data-page-step="${side}:-1"]`).disabled = this.busy || this.page[side] <= 1;
+            this.find(`[data-page-step="${side}:1"]`).disabled = this.busy || this.page[side] >= pages;
         }
-        this.refreshSelectionCounts();
+        const toggle = this.find('[data-action="toggle-selection"]');
+        const allSelected = this.filteredRows.new.length > 0 && this.filteredRows.new.every(({ id }) => this.isEntryChecked(id));
+        toggle.textContent = allSelected ? '取消全选当前结果' : '全选当前结果';
+        toggle.setAttribute('aria-pressed', String(allSelected));
+        toggle.disabled = this.busy || !this.newBook || !this.filteredRows.new.length;
         this.renderSelectionSummary();
         this.renderPairControls();
         for (const side of ['old', 'new']) {
             const pairsById = new Map(this.pairs.map(p => [side === 'old' ? p.oldId : p.newId, p]));
             for (const li of this.dialog.querySelectorAll(`[data-list="${side}"] .stwu-entry`)) {
                 const pair = pairsById.get(li.dataset.id);
-                li.querySelector('input').disabled = this.busy || (this.pickMode !== 'operation' ? side !== 'new' : !(pair ? this.inScope(pair.newId) && this.changed(pair) : side === 'new' && this.addable(li.dataset.id)));
+                li.querySelector('input').disabled = this.busy || (side === 'old' && !pair);
             }
         }
         for (const row of this.dialog.querySelectorAll('.stwu-set-row')) {
@@ -925,28 +842,23 @@ export class UpdaterWindow {
     }
 
     renderSelectionSummary() {
-        let visibleSelected = 0, hiddenSelected = 0;
-        if (this.pickMode === 'operation') {
-            if (!this.selectionCountsValid) this.refreshSelectionCounts();
-        } else {
-            const selection = this.pickMode === 'copy' ? this.copySelection : this.settingsSelection;
-            visibleSelected = this.visibleModeSelectionCount;
-            hiddenSelected = selection.size - visibleSelected;
-        }
-        const applyButton = this.find('[data-action="apply"]');
-        this.find('.stwu-selection').textContent = this.busy ? '处理中…' : this.pickMode === 'operation'
-            ? (this.fusion ? `更新 ${this.selectedUpdateCount} · 新增 ${this.selectedAdditionCount}` : `已选 ${this.selectedUpdateCount} 条`)
-            : `${this.pickMode === 'copy' ? '手工复制' : '母本设置'} · 可见 ${visibleSelected} · 隐藏 ${hiddenSelected}`;
-        applyButton.textContent = this.pickMode === 'copy' ? '复制可见勾选' : this.pickMode === 'settings' ? '打开批量设置' : this.fusion ? '融合所选' : '替换所选';
-        applyButton.disabled = this.busy || !!this.service.requiresReload || (this.pickMode === 'copy' ? !visibleSelected || !this.oldBook : this.pickMode === 'settings' ? !this.newBook : !(this.selectedUpdateCount + this.selectedAdditionCount));
+        if (!this.selectionCountsValid) this.refreshSelectionCounts();
+        const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedCopyCount} 条 · 当前结果可复制 ${this.visibleCopyCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;
+        for (const node of this.dialog.querySelectorAll('.stwu-selection')) node.textContent = node.classList.contains('stwu-selection-compact')
+            ? (this.busy ? '处理中…' : `已选 ${this.selectedCopyCount} · 可替换 ${this.selectedUpdateCount}`)
+            : summary;
+        const copy = this.find('[data-action="copy"]');
+        const replace = this.find('[data-action="replace"]');
+        copy.textContent = `复制所选${this.visibleCopyCount ? ` (${this.visibleCopyCount})` : ''}`;
+        replace.textContent = `替换所选${this.selectedUpdateCount ? ` (${this.selectedUpdateCount})` : ''}`;
+        copy.disabled = this.busy || !!this.service.requiresReload || !this.visibleCopyCount || !this.oldBook;
+        replace.disabled = this.busy || !!this.service.requiresReload || !this.selectedUpdateCount || !this.oldBook || !this.newBook;
     }
 
     refreshSelectionCounts() {
         this.selectedUpdateCount = this.selectedPairs().length;
-        this.selectedAdditionCount = this.selectedAdditions().length;
-        this.visibleModeSelectionCount = this.pickMode === 'operation'
-            ? 0
-            : this.find('[data-list="new"]').querySelectorAll('input[type="checkbox"]:checked').length;
+        this.selectedCopyCount = this.selectedCopyIds().length;
+        this.visibleCopyCount = this.filteredRows.new.reduce((count, { id }) => count + Number(this.isEntryChecked(id)), 0);
         this.selectionCountsValid = true;
     }
 
@@ -957,19 +869,12 @@ export class UpdaterWindow {
         menu.querySelector('[value="pair"]').disabled = !this.selectedOld || !this.selectedNew;
         menu.querySelector('[value="unpair"]').disabled = !paired;
         menu.querySelector('[value="unpair-all"]').disabled = !this.pairs.length;
-        const newOption = menu.querySelector('[value="new"]');
-        newOption.disabled = !this.fusion || !this.selectedNew || this.incoming().get(this.selectedNew) !== 'review';
-        newOption.textContent = this.forcedNew.has(this.selectedNew) ? '取消新增标记' : '标记为新条目';
-        this.find('.stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目' : '点击两边条目可手动配对';
+        this.find('.stwu-pairbar .stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目，可执行配对' : '点击两侧条目后，可在此配对';
     }
 
     renderPreview() {
         const workspace = this.find('.stwu-workspace');
         workspace.dataset.previewOpen = String(this.previewOpen);
-        if (!this.dialog.classList.contains('stwu-keyboard')) {
-            this.syncAreaResize('list');
-            if (this.previewOpen) this.syncAreaResize('preview');
-        }
         const entries = {
             old: this.oldBook?.entries[this.selectedOld],
             new: this.newBook?.entries[this.selectedNew],
@@ -985,41 +890,37 @@ export class UpdaterWindow {
     }
 
     async apply() {
-        const additions = this.selectedAdditions();
         const selectedUpdateIds = new Set(this.selectedPairs().map(pair => pair.newId));
-        const pairs = this.pairs.map(pair => ({ ...pair, checked: pair.checked && this.inScope(pair.newId) }));
-        const approvedNew = additions.filter(id => this.incoming().get(id) === 'review');
-        const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode, { merge: this.fusion, additions, approvedNew });
-        if (!(result.updated + result.added)) { this.message(`没有需要写入的内容。${result.skipped ? `完整重复或无变化 ${result.skipped} 条已跳过。` : ''}`); return; }
+        const pairs = this.pairs.map(pair => ({ ...pair, checked: selectedUpdateIds.has(pair.newId) }));
+        const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode);
+        if (!result.updated) { this.message(`所选配对条目没有需要替换的内容。${result.skipped ? `无变化 ${result.skipped} 组已跳过。` : ''}`); return; }
         const scope = this.mode === 'content' ? '仅替换正文，保留原设置' : '完整更新条目，同步新版标题、关键词及设置';
-        const addedNote = result.added ? '\n新增条目保留完整设置。' : '';
-        const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.join('、')}；名单外不参与。\n` : '处理范围：整本。\n';
+        const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.join('、')}；名单外不参与替换。\n` : '处理范围：整本。\n';
         const visible = new Set(this.visibleSourceIds());
-        const hidden = [...this.selectedPairs().map(pair => pair.newId), ...additions].filter(id => !visible.has(id)).length;
-        const hiddenNote = hidden ? `\n其中 ${hidden} 条被母本搜索隐藏，仍参与处理。` : '';
-        const reviewNote = approvedNew.length ? `\n其中 ${approvedNew.length} 条待核对，按勾选复制。` : '';
-        const skipNote = result.skipped ? `\n将跳过 ${result.skipped} 条完整重复或无变化项。` : '';
-        if (!globalThis.confirm(`将向“${this.oldName}”写入：更新 ${result.updated} 条，新增 ${result.added} 条。\n来源：${this.newName}\n${scopeNote}已有条目：${scope}${addedNote}${hiddenNote}${reviewNote}${skipNote}\n确认继续？`)) return;
+        const hidden = [...selectedUpdateIds].filter(id => !visible.has(id)).length;
+        const hiddenNote = hidden ? `其中 ${hidden} 条被搜索隐藏，但仍参与替换。\n` : '';
+        const skipNote = result.skipped ? `无变化 ${result.skipped} 组将跳过。\n` : '';
+        if (!globalThis.confirm(`将把“${this.newName}”中的 ${result.updated} 条已配对内容替换到“${this.oldName}”。\n${scopeNote}替换范围：${scope}。\n${hiddenNote}${skipNote}确认继续？`)) return;
         this.message('正在保存并核验世界书…');
-        try {
-            const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
-            this.oldBook = saved.data;
-            if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
-            this.changeCache.clear();
-            this.pairs = [...this.pairs.map(pair => selectedUpdateIds.has(pair.newId) ? { ...pair, checked: false } : pair), ...result.addedPairs];
-            for (const id of selectedUpdateIds) this.pairChecks.set(id, false);
-            for (const pair of result.addedPairs) { this.newSelection.delete(pair.newId); this.forcedNew.delete(pair.newId); this.pairChecks.set(pair.newId, false); }
-            this.invalidateIncoming();
-            this.message(`已核验：更新 ${result.updated} 条，新增 ${result.added} 条，跳过 ${result.skipped} 条。${saved.note || ''}`);
-        } finally { /* 不写备份 */ }
+        const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
+        this.oldBook = saved.data;
+        if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
+        this.changeCache.clear();
+        this.pairs = this.pairs.map(pair => selectedUpdateIds.has(pair.newId) ? { ...pair, checked: false } : pair);
+        this.syncPairIndex();
+        for (const id of selectedUpdateIds) { this.pairChecks.set(id, false); this.newSelection.set(id, false); }
+        this.selectionCountsValid = false;
+        this.invalidateIncoming();
+        this.message(`已核验并替换 ${result.updated} 组，跳过无变化 ${result.skipped} 组。${saved.note || ''}`);
     }
 
     async copySelected() {
         if (!this.oldBook || !this.newBook) throw new Error('请先载入原书和母本。');
         const visible = new Set(this.visibleSourceIds());
-        const additions = [...this.copySelection].filter(id => visible.has(id) && this.newBook.entries[id]);
-        const hidden = this.copySelection.size - additions.length;
-        if (!additions.length) { this.message('没有手工勾选的可见母本条目。'); return; }
+        const selectedIds = this.selectedCopyIds();
+        const additions = selectedIds.filter(id => visible.has(id) && this.newBook.entries[id]);
+        const hidden = selectedIds.length - additions.length;
+        if (!additions.length) { this.message('当前搜索结果里没有已勾选的来源条目。'); return; }
         const selected = new Set(additions);
         const overridden = this.pairs.filter(pair => selected.has(pair.newId));
         const pairs = this.pairs.filter(pair => !selected.has(pair.newId)).map(pair => ({ ...pair, checked: false }));
@@ -1028,24 +929,25 @@ export class UpdaterWindow {
         const more = additions.length > 12 ? `\n- 另有 ${additions.length - 12} 条` : '';
         const conflicts = overridden.length ? `\n其中 ${overridden.length} 条已有配对：本次只复制，不替换原配对目标；成功后改为配对新副本。` : '';
         const hiddenNote = hidden ? `\n另有 ${hidden} 条手工勾选被搜索隐藏，本次不复制。` : '';
-        if (!globalThis.confirm(`将从“${this.newName}”向“${this.oldName}”复制以下 ${result.added} 条完整条目：\n${names}${more}${conflicts}${hiddenNote}\n名单范围不限制此操作；即使已有相同副本也会再次复制。确认继续？`)) return;
+        if (!globalThis.confirm(`将从“${this.newName}”向“${this.oldName}”复制以下 ${result.added} 条完整条目：\n${names}${more}${conflicts}${hiddenNote}\n复制不受定点名单限制；即使已有相同副本也会再次复制。确认继续？`)) return;
         this.message('正在复制并核验世界书…');
         const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.changeCache.clear();
         this.pairs = [...this.pairs.filter(pair => !selected.has(pair.newId)), ...result.addedPairs];
+        this.syncPairIndex();
         for (const pair of result.addedPairs) {
-            this.copySelection.delete(pair.newId); this.newSelection.delete(pair.newId); this.forcedNew.delete(pair.newId);
+            this.newSelection.set(pair.newId, false);
             this.unpairedNew.delete(pair.newId); this.pairChecks.set(pair.newId, false);
         }
+        this.selectionCountsValid = false;
         this.invalidateIncoming();
-        this.message(`已核验：手工复制 ${result.added} 条。${hidden ? `搜索隐藏的 ${hidden} 条仍保留勾选，未复制。` : ''}${saved.note || ''}`);
+        this.message(`已核验：复制 ${result.added} 条。${hidden ? `搜索隐藏的 ${hidden} 条仍保留勾选，未复制。` : ''}${saved.note || ''}`);
     }
 
     destroy() {
         this.disposed = true;
-        this.stopAreaResize();
         this.events.abort();
         this.dialog.close(); this.dialog.remove();
         for (const timer of this.timers) clearTimeout(timer);
