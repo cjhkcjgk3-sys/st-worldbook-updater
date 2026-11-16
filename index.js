@@ -11,7 +11,7 @@ function mount() {
     const panel = document.createElement('div'); panel.id = PANEL_ID; panel.className = 'stwu-launcher';
     const heading = document.createElement('strong'); heading.textContent = '世界书更新器';
     const button = document.createElement('button'); button.type = 'button'; button.className = 'menu_button'; button.textContent = '打开世界书更新器';
-    const note = document.createElement('p'); note.textContent = '双窗口对照，批量更新或融合世界书条目。';
+    const note = document.createElement('p'); note.textContent = '左右并排对照，点选条目后在下方查看正文。';
     button.addEventListener('click', () => {
         try {
             if (!windowView) windowView = new UpdaterWindow(new WorldbookService());

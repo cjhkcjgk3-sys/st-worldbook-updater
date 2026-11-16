@@ -1,0 +1,26 @@
+/* Small local fixture for the host classes used by SillyTavern 1.19.0. */
+:root {
+  --mainFontFamily: system-ui, sans-serif;
+  --mainFontSize: 15px;
+  --SmartThemeBodyColor: #ddd;
+  --SmartThemeBlurTintColor: #171717;
+  --SmartThemeBorderColor: #555;
+  --SmartThemeEmColor: #aaa;
+  --SmartThemeQuoteColor: #e18a24;
+  --SmartThemeShadowColor: rgba(0, 0, 0, .5);
+  --black30a: rgba(0, 0, 0, .3);
+  --black70a: rgba(0, 0, 0, .5);
+  --white30a: rgba(255, 255, 255, .15);
+}
+.popup { color: var(--SmartThemeBodyColor); background: var(--SmartThemeBlurTintColor); border: 1px solid var(--SmartThemeBorderColor); border-radius: 10px; display: flex; flex-direction: column; }
+.popup-body { display: flex; flex-direction: column; overflow: hidden; width: 100%; height: 100%; }
+.popup-content { flex: 1; min-height: 0; overflow: hidden; }
+.menu_button { display: flex; align-items: center; justify-content: center; width: min-content; min-height: 32px; padding: 3px 5px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 5px; color: var(--SmartThemeBodyColor); background: var(--SmartThemeBlurTintColor); cursor: pointer; }
+.menu_button:hover:enabled, .menu_button.active { background: var(--white30a); }
+.text_pole { width: 100%; min-height: 34px; padding: 3px 5px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 5px; color: var(--SmartThemeBodyColor); background: var(--black30a); font: inherit; }
+.fa-solid { font-style: normal; }
+.fa-expand::before { content: "⛶"; font-size: 1.1em; }
+.fa-compress::before { content: "⛶"; font-size: 1.1em; }
+.fa-ellipsis::before { content: "⋯"; font-size: 1.35em; font-weight: 700; }
+.fa-align-left::before { content: "≡"; }
+.fa-chevron-down::before { content: "⌄"; }

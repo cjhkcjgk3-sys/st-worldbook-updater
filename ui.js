@@ -20,8 +20,8 @@ export class UpdaterWindow {
         this.newSelection = new Map();
         this.forcedNew = new Set();
         this.selectedOld = this.selectedNew = null;
-        this.activeSide = 'old';
-        this.scrollPositions = { old: 0, new: 0 };
+        this.previewOpen = false;
+        this.listSplit = globalThis.matchMedia?.('(max-width: 680px)').matches && globalThis.innerHeight > 600 ? 60 : 68;
         this.mode = 'content';
         this.fusion = false;
         this.scopeNames = [];
@@ -35,11 +35,14 @@ export class UpdaterWindow {
         this.build();
         const syncViewport = () => {
             const viewport = globalThis.visualViewport;
+            const viewportHeight = viewport?.height || globalThis.innerHeight;
             this.dialog.classList.toggle('stwu-keyboard', !!(viewport && viewport.height < globalThis.innerHeight - 100 && document.activeElement?.matches('[data-search], [data-scope]')));
-            for (const dialog of [this.dialog, this.compareDialog]) if (dialog) {
-                dialog.style.setProperty('--wu-vh', (viewport?.height || globalThis.innerHeight) + 'px');
-                dialog.style.setProperty('--wu-top', (viewport?.offsetTop || 0) + 'px');
-            }
+            this.dialog.style.setProperty('--wu-vh', viewportHeight + 'px');
+            const expanded = this.dialog.classList.contains('stwu-expanded');
+            const mobile = globalThis.matchMedia?.('(max-width: 680px)').matches;
+            const dialogHeight = expanded ? viewportHeight - (mobile ? 0 : 12) : mobile ? viewportHeight - 16 : Math.min(840, viewportHeight - 32);
+            const verticalInset = expanded && mobile ? 0 : expanded ? 6 : Math.max(8, (viewportHeight - dialogHeight) / 2);
+            this.dialog.style.setProperty('--wu-top', ((viewport?.offsetTop || 0) + verticalInset) + 'px');
         };
         this.syncViewport = syncViewport;
         this.on(globalThis, 'resize', syncViewport);
@@ -55,132 +58,141 @@ export class UpdaterWindow {
     on(node, type, fn) { node.addEventListener(type, fn, { signal: this.events.signal }); }
     find(selector) { return this.dialog.querySelector(selector); }
 
-    setActiveSide(side) {
-        if (!['old', 'new'].includes(side)) return;
-        const changed = this.activeSide !== side;
-        if (changed) {
-            const currentList = this.find(`[data-list="${this.activeSide}"]`);
-            if (currentList) this.scrollPositions[this.activeSide] = currentList.scrollTop;
-        }
-        this.activeSide = side;
-        const panels = this.find('.stwu-panels');
-        if (panels) panels.dataset.activeSide = side;
-        for (const button of this.dialog.querySelectorAll('[data-view-side]')) {
-            button.setAttribute('aria-pressed', String(button.dataset.viewSide === side));
-        }
-        if (changed) {
-            const selectedId = side === 'old' ? this.selectedOld : this.selectedNew;
-            const restore = () => {
-                if (this.activeSide !== side) return;
-                const list = this.find(`[data-list="${side}"]`);
-                if (!list) return;
-                list.scrollTop = this.scrollPositions[side];
-                if (selectedId) list.querySelector(`[data-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' });
-                this.scrollPositions[side] = list.scrollTop;
-            };
-            if (globalThis.requestAnimationFrame) globalThis.requestAnimationFrame(restore);
-            else restore();
-        }
-    }
-
     build() {
-        this.dialog = element('dialog', 'stwu stwu-dialog');
+        this.dialog = element('dialog', 'popup wider_dialogue_popup stwu stwu-dialog');
         if (typeof this.dialog.showModal !== 'function') throw new Error('当前浏览器不支持对照窗口，请更新浏览器或 Android WebView。');
         this.dialog.id = 'st-worldbook-updater-window';
         this.dialog.setAttribute('aria-labelledby', 'stwu-heading');
         // This template is static. Imported names and content are always assigned with textContent.
         this.dialog.innerHTML = `
-          <header class="stwu-header">
-            <div><h2 id="stwu-heading">世界书更新器</h2><p>右侧来源，更新或融合到左侧</p></div>
-            <div class="stwu-header-actions"><button type="button" data-action="compact-tools" aria-expanded="false">工具</button><button type="button" data-action="reload">重新载入</button><button type="button" data-action="close" aria-label="关闭世界书更新器">关闭</button></div>
-          </header>
-          <div class="stwu-notice" role="status" aria-live="polite">先选择原世界书，再选择新版或打开 JSON 文件。</div>
-          <nav class="stwu-mobile-switch" aria-label="选择要查看的世界书">
-            <button type="button" data-view-side="old" aria-pressed="true"><span>原书</span><span class="stwu-mobile-count" data-mobile-count="old"></span></button>
-            <button type="button" data-view-side="new" aria-pressed="false"><span>新版</span><span class="stwu-mobile-count" data-mobile-count="new"></span></button>
-          </nav>
-          <div class="stwu-panels" data-active-side="old">
-            <section class="stwu-pane" data-side="old" aria-label="原世界书">
-              <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
-              <select aria-label="选择原世界书" data-book="old"></select>
-              <div class="stwu-source-line">原书独有条目会保留</div>
-              <input type="search" data-search="old" aria-label="搜索原世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
-              <ol class="stwu-list" data-list="old" aria-label="原世界书条目"></ol>
-            </section>
-            <section class="stwu-pane" data-side="new" aria-label="新版世界书">
-              <div class="stwu-pane-head"><h3>新版世界书</h3><span class="stwu-count"></span></div>
-              <select aria-label="选择新版世界书" data-book="new"></select>
-              <div class="stwu-source-line"><button type="button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
-              <input type="search" data-search="new" aria-label="搜索新版世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
-              <ol class="stwu-list" data-list="new" aria-label="新版世界书条目"></ol>
-            </section>
-          </div>
-          <div class="stwu-pairbar">
-            <span class="stwu-pairhint">点击两边条目可手动配对</span>
-            <div><select data-pair-action aria-label="配对操作"><option value="" disabled selected>配对操作</option><option value="pair">配对所选</option><option value="unpair">解除所选配对</option><option value="unpair-all">解除全部配对</option><option value="auto">重新自动匹配</option><option value="new">标记为新条目</option></select><button type="button" data-action="compare">查看正文</button></div>
-          </div>
-          <footer class="stwu-footer">
-            <details class="stwu-scope">
-              <summary><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
-              <div class="stwu-scope-content">
-                <label for="stwu-scope-input">每行一个名字；留空时处理整本</label>
-                <textarea id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
-                <div class="stwu-scope-actions"><button type="button" data-action="copy-names">复制来源条目名</button></div>
-                <p class="stwu-scope-report" data-scope-report role="status"></p>
-                <details class="stwu-scope-spec">
-                  <summary>名单怎么写才一定匹配</summary>
-                  <ol>
-                    <li>每行一个角色名，写全名（<code>维琳娜·艾嘉德</code>），不带编号、书名号、引号和说明文字。</li>
-                    <li>别名或英文名写在括号里或跟在等号后：<code>零号·安比（安比·德玛拉）</code>、<code>波可娜·费雷尼=Pulchra Fellini</code>。</li>
-                    <li>形态/皮肤自动归到主名下：写 <code>拉菲</code> 会带上 <code>拉菲（改造）</code>。</li>
-                    <li>不要写作品名。要写就必须加一行 <code>作品别名：原神=Genshin</code>，否则会被当成名字的一部分。</li>
-                  </ol>
-                  <p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p>
+          <div class="popup-body"><div class="popup-content stwu-layout">
+            <header class="stwu-header">
+              <div><h2 id="stwu-heading">世界书更新器</h2><p>左右对照，点击条目后在下方查看正文</p></div>
+              <div class="stwu-header-actions">
+                <button type="button" class="menu_button stwu-icon-button" data-action="toggle-size" aria-label="放大窗口" aria-expanded="false" title="放大窗口"><i class="fa-solid fa-expand" aria-hidden="true"></i></button>
+                <details class="stwu-header-menu">
+                  <summary class="menu_button stwu-icon-button" aria-label="更多操作" title="更多操作"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></summary>
+                  <div class="stwu-header-menu-content"><button type="button" class="menu_button" data-action="reload">重新载入</button><button type="button" class="menu_button" data-action="close">关闭窗口</button></div>
                 </details>
               </div>
+            </header>
+            <div class="stwu-notice" role="status" aria-live="polite">先选择原世界书，再选择新版或打开 JSON 文件。</div>
+            <div class="stwu-workspace" data-preview-open="false">
+              <div class="stwu-panels">
+                <section class="stwu-pane" data-side="old" aria-label="原世界书">
+                  <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
+                  <select class="text_pole" aria-label="选择原世界书" data-book="old"></select>
+                  <div class="stwu-source-line">原书独有条目会保留</div>
+                  <input class="text_pole" type="search" data-search="old" aria-label="搜索原世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <ol class="stwu-list" data-list="old" aria-label="原世界书条目"></ol>
+                </section>
+                <section class="stwu-pane" data-side="new" aria-label="新版世界书">
+                  <div class="stwu-pane-head"><h3>新版世界书</h3><span class="stwu-count"></span></div>
+                  <select class="text_pole" aria-label="选择新版世界书" data-book="new"></select>
+                  <div class="stwu-source-line"><button type="button" class="menu_button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
+                  <input class="text_pole" type="search" data-search="new" aria-label="搜索新版世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <ol class="stwu-list" data-list="new" aria-label="新版世界书条目"></ol>
+                </section>
+              </div>
+              <div class="stwu-splitter" role="separator" aria-label="调整列表和正文区域高度" aria-orientation="horizontal" aria-valuemin="15" aria-valuemax="92" aria-valuenow="68" tabindex="0" data-splitter><span></span></div>
+              <section class="stwu-preview" aria-label="正文对照">
+                <div class="stwu-preview-head"><h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3><button type="button" class="menu_button stwu-icon-button" data-action="collapse-preview" aria-label="收起正文对照" title="收起正文对照"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button></div>
+                <div class="stwu-preview-grid">
+                  <article class="stwu-preview-pane" data-preview-side="old">
+                    <h4>原书 · <span data-preview-title="old">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="old"></p>
+                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="old">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="old"></pre></details></div>
+                  </article>
+                  <article class="stwu-preview-pane" data-preview-side="new">
+                    <h4>新版 · <span data-preview-title="new">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="new"></p>
+                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="new">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="new"></pre></details></div>
+                  </article>
+                </div>
+              </section>
+            </div>
+            <details class="stwu-pairbar">
+              <summary><i class="fa-solid fa-link" aria-hidden="true"></i><span>配对与条目操作</span><span class="stwu-pairhint">点击两边条目可手动配对</span></summary>
+              <div class="stwu-pairbar-content"><select class="text_pole" data-pair-action aria-label="配对操作"><option value="" disabled selected>配对操作</option><option value="pair">配对所选</option><option value="unpair">解除所选配对</option><option value="unpair-all">解除全部配对</option><option value="auto">重新自动匹配</option><option value="new">标记为新条目</option></select></div>
             </details>
-            <div class="stwu-options"><select data-selection aria-label="勾选操作"><option value="" disabled selected>勾选操作</option><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></select><select data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
-            <div class="stwu-bottom"><details class="stwu-backup"><summary>备份与恢复</summary><div><p class="stwu-backup-info">选择原世界书后查看备份。</p><button type="button" data-action="download">下载备份</button><button type="button" data-action="restore">恢复备份</button></div></details><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="stwu-primary" data-action="apply">替换所选</button></div>
-          </footer>`;
+            <footer class="stwu-footer">
+              <details class="stwu-scope">
+                <summary><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
+                <div class="stwu-scope-content">
+                  <label for="stwu-scope-input">每行一个名字；留空时处理整本</label>
+                  <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
+                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button></div>
+                  <p class="stwu-scope-report" data-scope-report role="status"></p>
+                  <details class="stwu-scope-spec"><summary>名单怎么写才一定匹配</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>多写名字不会误伤：没命中的只会出现在「未找到」里，不会写进世界书。</p></details>
+                </div>
+              </details>
+              <div class="stwu-options"><select class="text_pole" data-selection aria-label="勾选操作"><option value="" disabled selected>勾选操作</option><option value="all">全部勾选</option><option value="none">全部取消</option><option value="updates">仅勾选更新</option><option value="additions">仅勾选新增</option></select><select class="text_pole" data-mode aria-label="操作与替换范围"><option value="content">更新 · 仅正文</option><option value="full">更新 · 完整条目</option><option value="merge-content">融合 · 仅正文</option><option value="merge-full">融合 · 完整条目</option></select></div>
+              <div class="stwu-bottom"><details class="stwu-backup"><summary>备份与恢复</summary><div><p class="stwu-backup-info">选择原世界书后查看备份。</p><button type="button" class="menu_button" data-action="download">下载备份</button><button type="button" class="menu_button" data-action="restore">恢复备份</button></div></details><span class="stwu-selection" aria-live="polite">已选 0 条</span><button type="button" class="menu_button stwu-primary" data-action="apply">替换所选</button></div>
+            </footer>
+          </div></div>`;
         document.body.append(this.dialog);
         this.find('.stwu-scope').open = globalThis.matchMedia?.('(min-width: 681px) and (min-height: 521px)').matches ?? true;
-        this.setActiveSide(this.activeSide);
+        const workspace = this.find('.stwu-workspace');
+        workspace.style.setProperty('--stwu-list-size', `${this.listSplit}%`);
+        const headerMenu = this.find('.stwu-header-menu');
+        this.on(headerMenu, 'toggle', () => this.dialog.classList.toggle('stwu-tools-expanded', headerMenu.open));
         this.on(this.dialog, 'cancel', event => { event.preventDefault(); if (!this.busy) this.hide(); });
         this.on(this.dialog, 'click', event => {
             const action = event.target.closest('[data-action]')?.dataset.action;
             if (!action || this.busy) return;
             if (action === 'close') this.hide();
-            if (action === 'compact-tools') {
-                const expanded = !this.dialog.classList.contains('stwu-tools-expanded');
-                this.dialog.classList.toggle('stwu-tools-expanded', expanded);
-                const button = this.find('[data-action="compact-tools"]');
+            if (action === 'toggle-size') {
+                const expanded = !this.dialog.classList.contains('stwu-expanded');
+                this.dialog.classList.toggle('stwu-expanded', expanded);
+                const button = this.find('[data-action="toggle-size"]');
                 button.setAttribute('aria-expanded', String(expanded));
-                button.textContent = expanded ? '收起' : '工具';
+                button.setAttribute('aria-label', expanded ? '还原窗口' : '放大窗口');
+                button.title = expanded ? '还原窗口' : '放大窗口';
+                button.querySelector('i').className = `fa-solid ${expanded ? 'fa-compress' : 'fa-expand'}`;
+                this.syncViewport();
             }
-            if (action === 'reload') this.run(() => this.reload());
+            if (action === 'collapse-preview') {
+                this.previewOpen = false;
+                this.renderPreview();
+            }
+            if (action === 'reload') { this.find('.stwu-header-menu').open = false; this.run(() => this.reload()); }
             if (action === 'file') this.find('[data-file]').click();
-            if (action === 'compare') this.compare();
             if (action === 'apply') this.run(() => this.apply());
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'restore') this.run(() => this.restore());
             if (action === 'download') this.download();
         });
-        this.on(this.find('.stwu-mobile-switch'), 'click', event => {
-            const side = event.target.closest('[data-view-side]')?.dataset.viewSide;
-            if (!side) return;
-            this.setActiveSide(side);
-            this.renderControls();
+        const splitter = this.find('[data-splitter]');
+        const setListSplit = value => {
+            const maximum = Math.max(15, Math.min(92, 100 - (76 / Math.max(1, workspace.clientHeight)) * 100));
+            this.listSplit = Math.max(15, Math.min(maximum, value));
+            workspace.style.setProperty('--stwu-list-size', `${this.listSplit}%`);
+            splitter.setAttribute('aria-valuemax', String(Math.floor(maximum)));
+            splitter.setAttribute('aria-valuenow', String(Math.round(this.listSplit)));
+        };
+        setListSplit(this.listSplit);
+        this.on(splitter, 'pointerdown', event => {
+            if (!this.previewOpen || (event.pointerType === 'mouse' && event.button !== 0)) return;
+            event.preventDefault();
+            splitter.setPointerCapture(event.pointerId);
+        });
+        this.on(splitter, 'pointermove', event => {
+            if (!splitter.hasPointerCapture(event.pointerId)) return;
+            const bounds = workspace.getBoundingClientRect();
+            setListSplit(((event.clientY - bounds.top) / bounds.height) * 100);
+        });
+        for (const type of ['pointerup', 'pointercancel']) this.on(splitter, type, event => {
+            if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId);
+        });
+        this.on(splitter, 'keydown', event => {
+            if (!this.previewOpen) return;
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                event.preventDefault(); setListSplit(this.listSplit + (event.key === 'ArrowUp' ? -5 : 5));
+            } else if (event.key === 'Home') { event.preventDefault(); setListSplit(15); }
+            else if (event.key === 'End') { event.preventDefault(); setListSplit(92); }
         });
         for (const side of ['old', 'new']) {
-            this.on(this.find(`[data-book="${side}"]`), 'change', e => {
-                this.setActiveSide(side);
-                this.run(() => this.loadSide(side, e.target.value));
-            });
+            this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
             this.on(this.find(`[data-search="${side}"]`), 'input', () => this.renderList(side));
             const list = this.find(`[data-list="${side}"]`);
-            this.on(list, 'scroll', () => {
-                if (this.activeSide === side) this.scrollPositions[side] = list.scrollTop;
-            });
             this.on(list, 'click', event => {
                 const button = event.target.closest('.stwu-entry-button');
                 if (button) this.select(side, button.closest('[data-id]').dataset.id);
@@ -224,7 +236,6 @@ export class UpdaterWindow {
             if (file) this.run(async () => {
                 if (file.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，请先拆分世界书。');
                 const book = parseBook(await file.text());
-                this.setActiveSide('new');
                 this.newBook = book; this.newName = file.name; this.sourceKind = 'file';
                 this.repair(); this.selectors(); this.message(`已载入 ${file.name}，自动配对 ${this.pairs.length} 组。`);
             });
@@ -288,7 +299,6 @@ export class UpdaterWindow {
     }
 
     async loadSide(side, value) {
-        this.setActiveSide(side);
         if (value === 'file:') return;
         const name = value.startsWith('book:') ? value.slice(5) : '';
         if (side === 'old') { this.oldBook = null; this.oldName = name; this.backup = null; }
@@ -402,8 +412,8 @@ export class UpdaterWindow {
 
     select(side, id) {
         if (this.busy) return;
-        this.setActiveSide(side);
         if (side === 'old') this.selectedOld = id; else this.selectedNew = id;
+        this.previewOpen = true;
         const pair = this.pairs.find(p => p[side === 'old' ? 'oldId' : 'newId'] === id);
         if (pair) { this.selectedOld = pair.oldId; this.selectedNew = pair.newId; }
         this.render();
@@ -416,7 +426,7 @@ export class UpdaterWindow {
                 this.renderList(otherSide);
             }
             other.querySelector(`[data-id="${side === 'old' ? pair.newId : pair.oldId}"]`)?.scrollIntoView({ block: 'nearest' });
-            this.message(`配对依据：${pair.reason}。${this.changed(pair) ? '有变化，可查看正文。' : '当前替换范围内没有变化。'}`);
+            this.message(`配对依据：${pair.reason}。${this.changed(pair) ? '有变化，正文已在下方显示。' : '当前替换范围内没有变化。'}`);
         }
     }
 
@@ -426,7 +436,7 @@ export class UpdaterWindow {
             if (!this.inScope(this.selectedNew)) { this.message('这个来源条目不在定点名单内；请先把它加入名单，或清空名单后整本处理。', true); return; }
             this.pairs = pairManually(this.pairs, this.selectedOld, this.selectedNew);
             this.forcedNew.delete(this.selectedNew); this.newSelection.delete(this.selectedNew); this.invalidateIncoming();
-            this.message('已配对，可以查看正文或勾选替换。'); this.render();
+            this.message('已配对，正文已在下方并排显示。'); this.render();
         } catch (error) { this.message(error.message, true); }
     }
 
@@ -437,9 +447,9 @@ export class UpdaterWindow {
     }
 
     render() {
-        this.setActiveSide(this.activeSide);
         for (const side of ['old', 'new']) this.renderList(side);
         this.renderControls();
+        this.renderPreview();
     }
 
     renderList(side) {
@@ -456,7 +466,7 @@ export class UpdaterWindow {
             if (search && ![entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search)) continue;
             visible++;
             const linked = pairsById.get(id), pair = linked?.pair, changed = pair && this.changed(pair);
-            const li = element('li', 'stwu-entry'); li.dataset.id = id;
+            const li = element('li', 'stwu-entry wi-card-entry'); li.dataset.id = id;
             li.classList.toggle('stwu-entry-selected', id === (side === 'old' ? this.selectedOld : this.selectedNew));
             {
                 const label = element('label', 'stwu-entry-check');
@@ -466,7 +476,7 @@ export class UpdaterWindow {
                 check.setAttribute('aria-label', `${pair ? '更新' : side === 'new' ? outScope ? '名单外，不参与' : '新增' : '保留'}：${title(entry)}`);
                 label.append(check); li.append(label);
             }
-            const button = element('button', 'stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
+            const button = element('button', 'menu_button stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
             button.setAttribute('aria-pressed', String(li.classList.contains('stwu-entry-selected')));
             button.append(element('span', 'stwu-entry-title', title(entry)));
             const state = side === 'new' ? this.incoming().get(id) : null;
@@ -480,13 +490,10 @@ export class UpdaterWindow {
         if (!visible) fragment.append(element('li', 'stwu-empty', book ? (Object.keys(book.entries).length ? '没有符合条件的条目' : '这本世界书还没有条目') : '尚未载入世界书'));
         list.replaceChildren(fragment); list.scrollTop = scrollTop;
         if (focusedId) list.querySelector(`[data-id="${focusedId}"] ${focusedTag === 'INPUT' ? 'input' : 'button'}`)?.focus({ preventScroll: true });
-        const count = book ? `${visible}/${Object.keys(book.entries).length}` : '';
-        this.find(`[data-side="${side}"] .stwu-count`).textContent = count;
-        this.find(`[data-mobile-count="${side}"]`).textContent = count;
+        this.find(`[data-side="${side}"] .stwu-count`).textContent = book ? `${visible}/${Object.keys(book.entries).length}` : '';
     }
 
     renderControls() {
-        this.setActiveSide(this.activeSide);
         for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
         this.find('[data-scope-report]').textContent = this.scopeText();
         this.find('[data-scope-state]').textContent = this.scopeNames.length ? `限定 ${this.scopeNames.length} 个名字` : '整本参与';
@@ -508,7 +515,6 @@ export class UpdaterWindow {
         const newOption = menu.querySelector('[value="new"]');
         newOption.disabled = !this.fusion || !this.selectedNew || this.incoming().get(this.selectedNew) !== 'review';
         newOption.textContent = this.forcedNew.has(this.selectedNew) ? '取消新增标记' : '标记为新条目';
-        this.find('[data-action="compare"]').disabled = this.busy || !(this.selectedOld || this.selectedNew);
         this.find('[data-action="download"]').disabled = this.busy || !this.backup;
         this.find('[data-action="restore"]').disabled = this.busy || !this.backup || this.service.requiresReload;
         this.find('.stwu-backup-info').textContent = this.backup ? `最近备份：${new Date(this.backup.date).toLocaleString()}。仅保存在当前浏览器，可下载留存。` : '这本世界书尚无备份，写入前会自动保存。';
@@ -519,40 +525,24 @@ export class UpdaterWindow {
                 li.querySelector('input').disabled = this.busy || !(pair ? this.changed(pair) : side === 'new' && this.addable(li.dataset.id));
             }
         }
-        this.find('.stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目' : this.selectedOld ? '原书已选，切到新版再选一项' : this.selectedNew ? '新版已选，切到原书再选一项' : '点选两侧条目可手动配对';
+        this.find('.stwu-pairhint').textContent = this.selectedOld && this.selectedNew ? '已选两侧条目' : '点击两边条目可手动配对';
     }
 
-    compare() {
-        const oldEntry = this.oldBook?.entries[this.selectedOld], newEntry = this.newBook?.entries[this.selectedNew];
-        if (!oldEntry && !newEntry) return;
-        const dialog = element('dialog', 'stwu stwu-dialog stwu-compare');
-        dialog.setAttribute('aria-label', '新旧条目正文对照');
-        const header = element('header', 'stwu-header');
-        header.append(element('h2', '', '正文对照'));
-        const close = element('button', '', '返回列表'); close.type = 'button'; header.append(close);
-        const content = element('div', 'stwu-compare-grid');
-        for (const [label, entry] of [['原条目', oldEntry], ['新版条目', newEntry]]) {
-            const pane = element('section', 'stwu-compare-pane');
-            if (!entry) {
-                pane.append(element('h3', '', label));
-                pane.append(element('p', 'stwu-keys', label === '原条目' ? '未选中对应原条目；新条目可在融合模式下追加。' : '未选中新版条目，原条目会保留。'));
-                content.append(pane); continue;
-            }
-            pane.append(element('h3', '', label + ' · ' + title(entry)));
-            pane.append(element('p', 'stwu-keys', '关键词：' + (entry.key?.join('、') || '无')));
-            const body = element('div', 'stwu-compare-scroll');
-            body.append(element('pre', 'stwu-content', entry.content));
-            const details = element('details', 'stwu-entry-settings'); details.append(element('summary', '', '查看条目设置'));
-            const { content: _text, ...settings } = entry;
-            details.append(element('pre', 'stwu-content', JSON.stringify(settings, null, 2))); body.append(details);
-            pane.append(body); content.append(pane);
+    renderPreview() {
+        const workspace = this.find('.stwu-workspace');
+        workspace.dataset.previewOpen = String(this.previewOpen);
+        const entries = {
+            old: this.oldBook?.entries[this.selectedOld],
+            new: this.newBook?.entries[this.selectedNew],
+        };
+        for (const side of ['old', 'new']) {
+            const entry = entries[side];
+            this.find(`[data-preview-title="${side}"]`).textContent = entry ? title(entry) : '未选择对应条目';
+            this.find(`[data-preview-keys="${side}"]`).textContent = entry ? `关键词：${entry.key?.join('、') || '无'}` : '';
+            this.find(`[data-preview-content="${side}"]`).textContent = entry?.content ?? '尚未选择对应条目。';
+            const { content: _content, ...settings } = entry || {};
+            this.find(`[data-preview-settings="${side}"]`).textContent = entry ? JSON.stringify(settings, null, 2) : '';
         }
-        dialog.append(header, content); document.body.append(dialog); this.compareDialog = dialog;
-        this.syncViewport();
-        const dismiss = () => { dialog.close(); dialog.remove(); this.compareDialog = null; this.find('[data-action="compare"]').focus(); };
-        close.addEventListener('click', dismiss);
-        dialog.addEventListener('cancel', e => { e.preventDefault(); dismiss(); });
-        dialog.showModal();
     }
 
     async apply() {
@@ -601,7 +591,6 @@ export class UpdaterWindow {
     destroy() {
         this.disposed = true;
         this.events.abort();
-        this.compareDialog?.close(); this.compareDialog?.remove();
         this.dialog.close(); this.dialog.remove();
         for (const timer of this.timers) clearTimeout(timer);
         for (const url of this.urls) URL.revokeObjectURL(url);
