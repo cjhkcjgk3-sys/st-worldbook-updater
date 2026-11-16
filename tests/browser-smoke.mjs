@@ -107,15 +107,18 @@ async function openHeaderMenu(page) {
     if(await details.getAttribute('open')===null) await details.locator('summary').click();
 }
 async function assertLayout(page) {
+    await page.locator('[data-action="apply"]').scrollIntoViewIfNeeded();
     const metrics=await page.evaluate(()=>{
         const d=document.querySelector('.stwu-dialog'), panels=[...document.querySelectorAll('.stwu-pane')].map(x=>x.getBoundingClientRect());
         const apply=document.querySelector('[data-action="apply"]').getBoundingClientRect();
-        return {viewport:innerWidth,width:d.getBoundingClientRect().width,overflow:d.scrollWidth>d.clientWidth+1,nativePopup:d.classList.contains('popup')&&!!d.querySelector('.popup-body .popup-content'),paneWidths:panels.map(x=>x.width),visiblePanes:panels.filter(x=>x.width>0).length,listHeight:document.querySelector('.stwu-list').clientHeight,applyBottom:apply.bottom,viewportHeight:visualViewport.height};
+        const scroller=document.querySelector('.stwu-layout'), bounds=scroller.getBoundingClientRect();
+        return {viewport:innerWidth,width:d.getBoundingClientRect().width,overflow:d.scrollWidth>d.clientWidth+1,nativePopup:d.classList.contains('popup')&&!!d.querySelector('.popup-body .popup-content'),paneWidths:panels.map(x=>x.width),visiblePanes:panels.filter(x=>x.width>0).length,listHeight:document.querySelector('.stwu-list').clientHeight,applyBottom:apply.bottom,scrollBottom:bounds.bottom,scrollTop:bounds.top,applyTop:apply.top,overflowY:getComputedStyle(scroller).overflowY};
     });
     assert.ok(!metrics.overflow,JSON.stringify(metrics));assert.ok(metrics.width<=metrics.viewport+1,JSON.stringify(metrics));
     assert.equal(metrics.nativePopup,true,JSON.stringify(metrics));assert.equal(metrics.visiblePanes,2,JSON.stringify(metrics));
     assert.ok(Math.abs(metrics.paneWidths[0]-metrics.paneWidths[1])<=1,JSON.stringify(metrics));
-    assert.ok(metrics.listHeight>30,JSON.stringify(metrics));assert.ok(metrics.applyBottom<=metrics.viewportHeight+1,JSON.stringify(metrics));
+    assert.ok(metrics.listHeight>30,JSON.stringify(metrics));assert.equal(metrics.overflowY,'auto',JSON.stringify(metrics));
+    assert.ok(metrics.applyBottom<=metrics.scrollBottom+1&&metrics.applyTop>=metrics.scrollTop-1,JSON.stringify(metrics));
 }
 
 try {
@@ -171,18 +174,31 @@ try {
         assert.equal(await page.locator('[data-list="old"] .stwu-entry').count(),150);
         await clickRow(page,'old','80');
         await page.waitForFunction(()=>document.querySelector('.stwu-workspace').dataset.previewOpen==='true');
-        const list=page.locator('[data-list="old"]'),before=await list.evaluate(node=>node.clientHeight);
-        const splitter=page.locator('[data-splitter]'),box=await splitter.boundingBox();
-        const splitStart=Number(await splitter.getAttribute('aria-valuenow'));
+        const listPanel=page.locator('[data-resize-panel="list"]'), previewPanel=page.locator('[data-resize-panel="preview"]');
+        const listHandle=page.locator('[data-resize="list"]'), previewHandle=page.locator('[data-resize="preview"]');
+        const height=locator=>locator.evaluate(node=>node.getBoundingClientRect().height);
+        const listBefore=await height(listPanel), previewBefore=await height(previewPanel);
+        await listHandle.evaluate(node=>node.scrollIntoView({block:'center'}));
+        const box=await listHandle.boundingBox();
         await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
         await page.mouse.move(box.x+box.width/2,box.y+box.height/2+45,{steps:5});await page.mouse.up();
-        const after=await list.evaluate(node=>node.clientHeight);
-        assert.ok(after>before+25,JSON.stringify({before,after}));
-        const splitValue=Number(await splitter.getAttribute('aria-valuenow'));
-        assert.ok(splitValue>splitStart);await splitter.focus();await page.keyboard.press('ArrowUp');
-        assert.ok(Number(await splitter.getAttribute('aria-valuenow'))<splitValue);
+        const listAfter=await height(listPanel);
+        assert.ok(listAfter>listBefore+25,JSON.stringify({listBefore,listAfter}));
+        assert.equal(await height(previewPanel),previewBefore);
+        await previewHandle.focus();await page.keyboard.press('ArrowDown');
+        assert.ok(await height(previewPanel)>previewBefore);
+        assert.equal(await height(listPanel),listAfter);
+        const max=Number(await previewHandle.getAttribute('aria-valuemax'));
+        const initialDialogHeight=await page.locator('.stwu-dialog').evaluate(node=>node.getBoundingClientRect().height);
+        assert.ok(Math.abs(max-initialDialogHeight*50)<=1);
+        const input=page.locator('[data-resize-input="preview"]');
+        await input.fill(String(max+1000));await input.dispatchEvent('change');
+        assert.equal(await height(previewPanel),max);assert.equal(await height(listPanel),listAfter);
+        await input.fill('120');await input.dispatchEvent('change');
+        assert.equal(await height(previewPanel),120);
+        await assertLayout(page);
         assert.match(await page.locator('[data-preview-content="old"]').textContent(),/正文 81/);
-        results.push('150 条目双列表、点击自动展开双侧正文、鼠标/键盘拉伸分隔条通过');await ctx.close();
+        results.push('150 条目、独立鼠标/键盘/输入调整、50 倍上限及窗口滚动通过');await ctx.close();
     }
 
     reset();{
@@ -192,9 +208,10 @@ try {
             Object.defineProperty(visualViewport,'height',{value:380,configurable:true});
             visualViewport.dispatchEvent(new Event('resize'));
         });
-        const metrics=await page.evaluate(()=>({compact:document.querySelector('.stwu-dialog').classList.contains('stwu-keyboard'),listHeight:document.querySelector('.stwu-list').clientHeight,bottom:document.querySelector('[data-action="apply"]').getBoundingClientRect().bottom}));
-        assert.equal(metrics.compact,true);assert.ok(metrics.listHeight>30);assert.ok(metrics.bottom<=381,JSON.stringify(metrics));
-        results.push('模拟键盘引起的可视视口收缩后，列表与底部操作仍可见');await ctx.close();
+        await page.locator('[data-action="apply"]').scrollIntoViewIfNeeded();
+        const metrics=await page.evaluate(()=>({compact:document.querySelector('.stwu-dialog').classList.contains('stwu-keyboard'),listHeight:document.querySelector('.stwu-list').clientHeight,bottom:document.querySelector('[data-action="apply"]').getBoundingClientRect().bottom,scrollBottom:document.querySelector('.stwu-layout').getBoundingClientRect().bottom}));
+        assert.equal(metrics.compact,true);assert.ok(metrics.listHeight>30);assert.ok(metrics.bottom<=metrics.scrollBottom+1,JSON.stringify(metrics));
+        results.push('模拟键盘引起的可视视口收缩后，列表与底部操作仍可滚动到达');await ctx.close();
     }
 
     reset();{

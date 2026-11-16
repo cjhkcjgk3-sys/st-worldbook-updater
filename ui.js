@@ -29,7 +29,8 @@ export class UpdaterWindow {
         this.pickMode = 'operation';
         this.selectedOld = this.selectedNew = null;
         this.previewOpen = false;
-        this.listSplit = globalThis.matchMedia?.('(max-width: 680px)').matches && globalThis.innerHeight > 600 ? 60 : 68;
+        this.resizeLimit = null;
+        this.resizeDrag = null;
         this.mode = 'content';
         this.fusion = false;
         this.scopeNames = [];
@@ -91,7 +92,7 @@ export class UpdaterWindow {
             </header>
             <div class="stwu-notice" role="status" aria-live="polite">先选择原世界书，再选择新版或打开 JSON 文件。</div>
             <div class="stwu-workspace" data-preview-open="false">
-              <div class="stwu-panels">
+              <div class="stwu-panels" data-resize-panel="list">
                 <section class="stwu-pane" data-side="old" aria-label="原世界书">
                   <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择原世界书" data-book="old"></select>
@@ -107,8 +108,8 @@ export class UpdaterWindow {
                   <ol class="stwu-list" data-list="new" aria-label="新版世界书条目"></ol>
                 </section>
               </div>
-              <div class="stwu-splitter" role="separator" aria-label="调整列表和正文区域高度" aria-orientation="horizontal" aria-valuemin="15" aria-valuemax="92" aria-valuenow="68" tabindex="0" data-splitter><span></span></div>
-              <section class="stwu-preview" aria-label="正文对照">
+              <div class="stwu-resize-row"><div class="stwu-splitter" role="separator" aria-label="调整条目区域高度" aria-orientation="horizontal" tabindex="0" data-resize="list" title="调整条目区域高度"><span></span></div><label class="stwu-size-input"><input type="number" inputmode="numeric" step="1" aria-label="条目区域高度（像素）" data-resize-input="list"> px</label></div>
+              <section class="stwu-preview" aria-label="正文对照" data-resize-panel="preview">
                 <div class="stwu-preview-head"><h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3><button type="button" class="menu_button stwu-icon-button" data-action="collapse-preview" aria-label="收起正文对照" title="收起正文对照"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button></div>
                 <div class="stwu-preview-grid">
                   <article class="stwu-preview-pane" data-preview-side="old">
@@ -121,6 +122,7 @@ export class UpdaterWindow {
                   </article>
                 </div>
               </section>
+              <div class="stwu-resize-row stwu-preview-resizer"><div class="stwu-splitter" role="separator" aria-label="调整正文区域高度" aria-orientation="horizontal" tabindex="0" data-resize="preview" title="调整正文区域高度"><span></span></div><label class="stwu-size-input"><input type="number" inputmode="numeric" step="1" aria-label="正文区域高度（像素）" data-resize-input="preview"> px</label></div>
             </div>
             <details class="stwu-pairbar">
               <summary><i class="fa-solid fa-link" aria-hidden="true"></i><span>配对与条目操作</span><span class="stwu-pairhint">点击两边条目可手动配对</span></summary>
@@ -165,8 +167,6 @@ export class UpdaterWindow {
           </div></div>`;
         document.body.append(this.dialog);
         this.find('.stwu-scope').open = globalThis.matchMedia?.('(min-width: 681px) and (min-height: 521px)').matches ?? true;
-        const workspace = this.find('.stwu-workspace');
-        workspace.style.setProperty('--stwu-list-size', `${this.listSplit}%`);
         const headerMenu = this.find('.stwu-header-menu');
         this.on(headerMenu, 'toggle', () => this.dialog.classList.toggle('stwu-tools-expanded', headerMenu.open));
         this.on(this.dialog, 'cancel', event => { event.preventDefault(); if (!this.busy) this.hide(); });
@@ -201,35 +201,7 @@ export class UpdaterWindow {
             if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
             if (action === 'sync-settings') this.run(() => this.syncSettingsToTarget());
         });
-        const splitter = this.find('[data-splitter]');
-        const setListSplit = value => {
-            const maximum = Math.max(15, Math.min(92, 100 - (76 / Math.max(1, workspace.clientHeight)) * 100));
-            this.listSplit = Math.max(15, Math.min(maximum, value));
-            workspace.style.setProperty('--stwu-list-size', `${this.listSplit}%`);
-            splitter.setAttribute('aria-valuemax', String(Math.floor(maximum)));
-            splitter.setAttribute('aria-valuenow', String(Math.round(this.listSplit)));
-        };
-        setListSplit(this.listSplit);
-        this.on(splitter, 'pointerdown', event => {
-            if (!this.previewOpen || (event.pointerType === 'mouse' && event.button !== 0)) return;
-            event.preventDefault();
-            splitter.setPointerCapture(event.pointerId);
-        });
-        this.on(splitter, 'pointermove', event => {
-            if (!splitter.hasPointerCapture(event.pointerId)) return;
-            const bounds = workspace.getBoundingClientRect();
-            setListSplit(((event.clientY - bounds.top) / bounds.height) * 100);
-        });
-        for (const type of ['pointerup', 'pointercancel']) this.on(splitter, type, event => {
-            if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId);
-        });
-        this.on(splitter, 'keydown', event => {
-            if (!this.previewOpen) return;
-            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-                event.preventDefault(); setListSplit(this.listSplit + (event.key === 'ArrowUp' ? -5 : 5));
-            } else if (event.key === 'Home') { event.preventDefault(); setListSplit(15); }
-            else if (event.key === 'End') { event.preventDefault(); setListSplit(92); }
-        });
+        for (const area of ['list', 'preview']) this.bindAreaResizer(area);
         for (const side of ['old', 'new']) {
             this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
             this.on(this.find(`[data-search="${side}"]`), 'input', () => { this.renderList(side); this.renderControls(); });
@@ -306,12 +278,95 @@ export class UpdaterWindow {
         this.dialog.style.removeProperty('height');
         this.dialog.style.removeProperty('width');
         this.dialog.showModal();
+        this.resizeLimit ??= Math.round(this.dialog.getBoundingClientRect().height * 50);
+        this.syncAreaResize('list');
+        if (this.previewOpen) this.syncAreaResize('preview');
         if (!this.books.length) await this.run(() => this.reload());
     }
 
     hide() {
+        this.stopAreaResize();
         this.dialog.close();
         this.previousFocus?.focus?.();
+    }
+
+    syncAreaResize(area) {
+        const panel = this.find(`[data-resize-panel="${area}"]`);
+        const handle = this.find(`[data-resize="${area}"]`);
+        const input = this.find(`[data-resize-input="${area}"]`);
+        const minimum = area === 'list' ? 200 : 120;
+        const height = Math.round(panel.getBoundingClientRect().height);
+        const maximum = this.resizeLimit || minimum;
+        handle.setAttribute('aria-valuemin', String(minimum));
+        handle.setAttribute('aria-valuemax', String(maximum));
+        handle.setAttribute('aria-valuenow', String(height));
+        input.min = String(minimum); input.max = String(maximum); input.value = String(height);
+    }
+
+    setAreaHeight(area, height) {
+        if (!Number.isFinite(height)) return;
+        const minimum = area === 'list' ? 200 : 120;
+        const maximum = this.resizeLimit || minimum;
+        const value = Math.round(Math.max(minimum, Math.min(maximum, height)));
+        this.find(`[data-resize-panel="${area}"]`).style.height = `${value}px`;
+        this.syncAreaResize(area);
+    }
+
+    stopAreaResize() {
+        if (!this.resizeDrag) return;
+        cancelAnimationFrame(this.resizeDrag.frame);
+        this.resizeDrag = null;
+    }
+
+    bindAreaResizer(area) {
+        const handle = this.find(`[data-resize="${area}"]`);
+        const input = this.find(`[data-resize-input="${area}"]`);
+        const scroller = this.find('.stwu-layout');
+        const updateDrag = () => {
+            const drag = this.resizeDrag;
+            if (drag) this.setAreaHeight(area, drag.height + drag.y - drag.startY + scroller.scrollTop - drag.scrollTop);
+        };
+        const autoScroll = () => {
+            const drag = this.resizeDrag;
+            if (!drag) return;
+            const bounds = scroller.getBoundingClientRect();
+            const top = Math.max(0, bounds.top), bottom = Math.min(globalThis.innerHeight, bounds.bottom);
+            const edge = Math.min(56, Math.max(0, (bottom - top) / 4));
+            const speed = drag.y > bottom - edge ? Math.min(24, (drag.y - (bottom - edge)) / 2)
+                : drag.y < top + edge ? -Math.min(24, ((top + edge) - drag.y) / 2) : 0;
+            const before = scroller.scrollTop;
+            if (speed) scroller.scrollTop += speed;
+            if (scroller.scrollTop !== before) updateDrag();
+            drag.frame = requestAnimationFrame(autoScroll);
+        };
+        this.on(handle, 'pointerdown', event => {
+            if (event.pointerType === 'mouse' && event.button !== 0) return;
+            event.preventDefault();
+            this.stopAreaResize();
+            handle.setPointerCapture(event.pointerId);
+            this.resizeDrag = { area, pointerId: event.pointerId, height: this.find(`[data-resize-panel="${area}"]`).getBoundingClientRect().height,
+                startY: event.clientY, y: event.clientY, scrollTop: scroller.scrollTop, frame: requestAnimationFrame(autoScroll) };
+        });
+        this.on(handle, 'pointermove', event => {
+            if (!this.resizeDrag || !handle.hasPointerCapture(event.pointerId)) return;
+            this.resizeDrag.y = event.clientY; updateDrag();
+        });
+        for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) this.on(handle, type, event => {
+            if (this.resizeDrag?.area !== area || this.resizeDrag.pointerId !== event.pointerId) return;
+            if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+            this.stopAreaResize();
+        });
+        this.on(handle, 'keydown', event => {
+            const height = this.find(`[data-resize-panel="${area}"]`).getBoundingClientRect().height;
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                event.preventDefault(); this.setAreaHeight(area, height + (event.key === 'ArrowUp' ? -20 : 20));
+            } else if (event.key === 'Home') { event.preventDefault(); this.setAreaHeight(area, 0); }
+            else if (event.key === 'End') { event.preventDefault(); this.setAreaHeight(area, this.resizeLimit); }
+        });
+        this.on(input, 'change', () => {
+            if (input.value === '') this.syncAreaResize(area);
+            else this.setAreaHeight(area, Number(input.value));
+        });
     }
 
     message(text, error = false) {
@@ -678,7 +733,11 @@ export class UpdaterWindow {
             const counterpart = side === 'old' ? pair.newId : pair.oldId;
             const counterpartRow = other.querySelector(`[data-id="${counterpart}"]`);
             const selectedCounterpart = side === 'old' ? this.selectedNew : this.selectedOld;
-            if (selectedCounterpart === counterpart) counterpartRow?.scrollIntoView({ block: 'nearest' });
+            if (selectedCounterpart === counterpart && counterpartRow) {
+                const row = counterpartRow.getBoundingClientRect(), list = other.getBoundingClientRect();
+                if (row.top < list.top) other.scrollTop += row.top - list.top;
+                else if (row.bottom > list.bottom) other.scrollTop += row.bottom - list.bottom;
+            }
             this.message(`现有配对依据：${pair.reason}。${selectedCounterpart === counterpart ? (this.changed(pair) ? '有变化，正文已在下方显示。' : '当前替换范围内没有变化。') : '两侧选中的条目不同于现有配对，可手动重新配对。'}${counterpartRow ? '' : '配对的对侧条目被搜索隐藏，搜索条件未更改。'}`);
         }
     }
@@ -833,6 +892,7 @@ export class UpdaterWindow {
     renderPreview() {
         const workspace = this.find('.stwu-workspace');
         workspace.dataset.previewOpen = String(this.previewOpen);
+        if (this.previewOpen && this.resizeLimit && !this.dialog.classList.contains('stwu-keyboard')) this.syncAreaResize('preview');
         const entries = {
             old: this.oldBook?.entries[this.selectedOld],
             new: this.newBook?.entries[this.selectedNew],
@@ -908,6 +968,7 @@ export class UpdaterWindow {
 
     destroy() {
         this.disposed = true;
+        this.stopAreaResize();
         this.events.abort();
         this.dialog.close(); this.dialog.remove();
         for (const timer of this.timers) clearTimeout(timer);

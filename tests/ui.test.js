@@ -103,8 +103,10 @@ test('rematching and changing scope preserve manual pairing, unpairing and expli
 
 test('independent left and right selection re-pairs two existing automatic matches', () => {
     const { ui, nodes } = setup();
-    nodes['[data-list="old"]'].querySelector = () => ({ scrollIntoView() {} });
-    nodes['[data-list="new"]'].querySelector = () => ({ scrollIntoView() {} });
+    for (const side of ['old', 'new']) {
+        nodes[`[data-list="${side}"]`].getBoundingClientRect = () => ({ top: 0, bottom: 100 });
+        nodes[`[data-list="${side}"]`].querySelector = () => ({ getBoundingClientRect: () => ({ top: 10, bottom: 30 }) });
+    }
     ui.select('old', '0'); ui.select('new', '11');
     assert.equal(ui.selectedOld, '0'); assert.equal(ui.selectedNew, '11');
     ui.manualPair();
@@ -259,6 +261,91 @@ class FakeNode {
     contains() { return false; }
     querySelector() { return null; }
 }
+
+test('independent area heights use the opened window as a 50-fold limit', async () => {
+    const ui = Object.create(UpdaterWindow.prototype);
+    const nodes = {};
+    for (const [area, initial] of [['list', 500], ['preview', 240]]) {
+        const panel = { style: { height: `${initial}px` } };
+        panel.getBoundingClientRect = () => ({ height: Number.parseFloat(panel.style.height) });
+        nodes[`[data-resize-panel="${area}"]`] = panel;
+        nodes[`[data-resize="${area}"]`] = new FakeNode('div');
+        nodes[`[data-resize-input="${area}"]`] = {};
+    }
+    ui.find = selector => nodes[selector];
+    Object.assign(ui, { books: [{}], previewOpen: true, resizeLimit: null, disposed: false });
+    ui.dialog = { open: false, style: { removeProperty() {} }, showModal() { this.open = true; }, getBoundingClientRect: () => ({ height: 700 }) };
+    const previousDocument = globalThis.document;
+    globalThis.document = { activeElement: null };
+    try {
+        await ui.open();
+        assert.equal(ui.resizeLimit, 35000);
+        ui.setAreaHeight('list', 1400);
+        assert.equal(nodes['[data-resize-panel="list"]'].style.height, '1400px');
+        assert.equal(nodes['[data-resize-panel="preview"]'].style.height, '240px');
+        ui.setAreaHeight('preview', 50000);
+        assert.equal(nodes['[data-resize-panel="preview"]'].style.height, '35000px');
+        assert.equal(nodes['[data-resize-panel="list"]'].style.height, '1400px');
+        assert.equal(nodes['[data-resize="preview"]'].attributes['aria-valuemax'], '35000');
+        assert.equal(nodes['[data-resize-input="preview"]'].value, '35000');
+        ui.setAreaHeight('list', -1); ui.setAreaHeight('preview', 1);
+        assert.equal(nodes['[data-resize-input="list"]'].value, '200');
+        assert.equal(nodes['[data-resize-input="preview"]'].value, '120');
+    } finally { if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument; }
+});
+
+test('resize handles process touch, keyboard and numeric input independently', () => {
+    const ui = Object.create(UpdaterWindow.prototype);
+    const nodes = {}, callbacks = new Map();
+    const frameCallbacks = new Map(), cancelledFrames = [];
+    let nextFrame = 1;
+    const oldRaf = globalThis.requestAnimationFrame, oldCancel = globalThis.cancelAnimationFrame, oldHeight = globalThis.innerHeight;
+    globalThis.requestAnimationFrame = fn => { const id = nextFrame++; frameCallbacks.set(id, fn); return id; };
+    globalThis.cancelAnimationFrame = id => { cancelledFrames.push(id); frameCallbacks.delete(id); };
+    globalThis.innerHeight = 800;
+    try {
+        for (const [area, initial] of [['list', 500], ['preview', 240]]) {
+            const panel = { style: { height: `${initial}px` } };
+            panel.getBoundingClientRect = () => ({ height: Number.parseFloat(panel.style.height) });
+            const handle = new FakeNode('div');
+            handle.setPointerCapture = id => { handle.captured = id; };
+            handle.hasPointerCapture = id => handle.captured === id;
+            handle.releasePointerCapture = () => { handle.captured = null; };
+            nodes[`[data-resize-panel="${area}"]`] = panel;
+            nodes[`[data-resize="${area}"]`] = handle;
+            nodes[`[data-resize-input="${area}"]`] = {};
+        }
+        nodes['.stwu-layout'] = { scrollTop: 0, getBoundingClientRect: () => ({ top: 0, bottom: 800 }) };
+        ui.find = selector => nodes[selector];
+        ui.on = (node, type, handler) => { if (!callbacks.has(node)) callbacks.set(node, {}); callbacks.get(node)[type] = handler; };
+        ui.resizeLimit = 35000; ui.resizeDrag = null;
+        ui.bindAreaResizer('list'); ui.bindAreaResizer('preview');
+        const list = nodes['[data-resize="list"]'], preview = nodes['[data-resize="preview"]'];
+        const event = props => ({ preventDefault() { this.prevented = true; }, ...props });
+        callbacks.get(list).pointerdown(event({ pointerType: 'touch', pointerId: 1, clientY: 400 }));
+        callbacks.get(list).pointermove(event({ pointerId: 1, clientY: 450 }));
+        assert.equal(nodes['[data-resize-panel="list"]'].style.height, '550px');
+        assert.equal(nodes['[data-resize-panel="preview"]'].style.height, '240px');
+        callbacks.get(list).pointerup(event({ pointerId: 1 }));
+        assert.equal(ui.resizeDrag, null); assert.equal(list.captured, null); assert.equal(cancelledFrames.length, 1);
+        const key = event({ key: 'ArrowDown' }); callbacks.get(preview).keydown(key);
+        assert.equal(key.prevented, true); assert.equal(nodes['[data-resize-panel="preview"]'].style.height, '260px');
+        assert.equal(nodes['[data-resize-panel="list"]'].style.height, '550px');
+        const input = nodes['[data-resize-input="preview"]'];
+        input.value = '999999'; callbacks.get(input).change();
+        assert.equal(nodes['[data-resize-panel="preview"]'].style.height, '35000px');
+        input.value = ''; callbacks.get(input).change(); assert.equal(input.value, '35000');
+        callbacks.get(list).pointerdown(event({ pointerType: 'touch', pointerId: 2, clientY: 790 }));
+        const frame = ui.resizeDrag.frame; frameCallbacks.get(frame)();
+        assert.ok(nodes['.stwu-layout'].scrollTop > 0);
+        assert.ok(Number.parseFloat(nodes['[data-resize-panel="list"]'].style.height) > 550);
+        callbacks.get(list).pointercancel(event({ pointerId: 2 })); assert.equal(ui.resizeDrag, null);
+    } finally {
+        if (oldRaf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = oldRaf;
+        if (oldCancel === undefined) delete globalThis.cancelAnimationFrame; else globalThis.cancelAnimationFrame = oldCancel;
+        if (oldHeight === undefined) delete globalThis.innerHeight; else globalThis.innerHeight = oldHeight;
+    }
+});
 
 test('renderList pins scope matches and blocks out-of-scope pairs on both sides', () => {
     const { ui, nodes } = setup();
