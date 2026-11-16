@@ -100,21 +100,18 @@ export class UpdaterWindow {
               <details class="stwu-tool stwu-pairbar">
                 <summary class="menu_button"><i class="fa-solid fa-link" aria-hidden="true"></i><span>配对操作</span></summary>
                 <div class="stwu-tool-content stwu-pairbar-content">
-                  <div class="stwu-tool-head"><strong>配对操作</strong><button type="button" class="menu_button stwu-mini-btn" data-action="close-tools">收起</button></div>
                   <div class="stwu-pair-actions">
-                    <button type="button" class="menu_button" data-pair-btn="pair">配对所选</button>
-                    <button type="button" class="menu_button" data-pair-btn="unpair">解除所选</button>
-                    <button type="button" class="menu_button" data-pair-btn="unpair-all">解除全部</button>
+                    <button type="button" class="menu_button" data-pair-btn="pair" data-pair-toggle>配对所选</button>
                     <button type="button" class="menu_button" data-pair-btn="auto">重新匹配</button>
                     <button type="button" class="menu_button" data-pair-btn="auto-reset">重置配对</button>
+                    <button type="button" class="menu_button" data-pair-btn="unpair-all">全部解除</button>
                   </div>
-                  <span class="stwu-pairhint">点击两侧条目后，可在此配对</span>
+                  <span class="stwu-pairhint">点击两侧条目后，可在此配对或解除</span>
                 </div>
               </details>
               <details class="stwu-tool stwu-scope">
                 <summary class="menu_button"><i class="fa-solid fa-bullseye" aria-hidden="true"></i><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
                 <div class="stwu-tool-content stwu-scope-content">
-                  <div class="stwu-tool-head"><strong>定点名单</strong><button type="button" class="menu_button stwu-mini-btn" data-action="close-tools">收起</button></div>
                   <label for="stwu-scope-input">名单限定替换范围；搜索只改变列表显示。</label>
                   <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
                   <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
@@ -125,7 +122,6 @@ export class UpdaterWindow {
               <details class="stwu-tool stwu-settings">
                 <summary class="menu_button"><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>条目设置</span><span class="stwu-settings-state" data-settings-state>批量设置</span></summary>
                 <div class="stwu-tool-content stwu-settings-content">
-                  <div class="stwu-tool-head"><strong>条目设置（批量）</strong><button type="button" class="menu_button stwu-mini-btn" data-action="close-tools">收起</button></div>
                   <div class="stwu-set-scope">
                     <label>作用范围
                       <select class="text_pole" data-set-scope>
@@ -173,12 +169,8 @@ export class UpdaterWindow {
                 <div class="stwu-preview-head">
                   <h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3>
                   <div class="stwu-preview-actions">
-                    <div class="stwu-split-group" role="group" aria-label="窗口高度比例">
-                      <button type="button" class="menu_button stwu-mini-btn" data-split-btn="list">列表大</button>
-                      <button type="button" class="menu_button stwu-mini-btn" data-split-btn="balanced" aria-pressed="true">均分</button>
-                      <button type="button" class="menu_button stwu-mini-btn" data-split-btn="body">正文大</button>
-                    </div>
-                    <button type="button" class="menu_button stwu-mini-btn" data-action="close-preview">收起正文</button>
+                    <button type="button" class="menu_button stwu-mini-btn" data-action="cycle-split" title="切换条目与正文窗口高度比例">高度：均分</button>
+                    <button type="button" class="menu_button stwu-mini-btn" data-action="close-preview">收起</button>
                   </div>
                 </div>
                 <div class="stwu-preview-grid">
@@ -205,14 +197,12 @@ export class UpdaterWindow {
         this.on(this.dialog, 'cancel', event => { event.preventDefault(); if (!this.busy) this.hide(); });
         this.on(this.dialog, 'click', event => {
             if (!event.target.closest('.stwu-tool')) this.closeTools();
-            const splitBtn = event.target.closest('[data-split-btn]');
-            if (splitBtn && !this.busy) { this.setSplitMode(splitBtn.dataset.splitBtn); return; }
             const pairBtn = event.target.closest('[data-pair-btn]');
             if (pairBtn && !this.busy) { this.runPairAction(pairBtn.dataset.pairBtn); return; }
             const action = event.target.closest('[data-action]')?.dataset.action;
             if (!action || this.busy) return;
             if (action === 'close') this.hide();
-            if (action === 'close-tools') this.closeTools();
+            if (action === 'cycle-split') this.cycleSplitMode();
             if (action === 'close-preview') { this.previewOpen = false; this.renderPreview(); }
             if (action === 'toggle-size') {
                 const expanded = !this.dialog.classList.contains('stwu-expanded');
@@ -314,6 +304,12 @@ export class UpdaterWindow {
         if (!['list', 'balanced', 'body'].includes(mode)) return;
         this.splitMode = mode;
         this.renderPreview();
+    }
+
+    cycleSplitMode() {
+        const order = ['balanced', 'body', 'list'];
+        const next = order[(order.indexOf(this.splitMode || 'balanced') + 1) % order.length];
+        this.setSplitMode(next);
     }
 
     runPairAction(action) {
@@ -898,27 +894,38 @@ export class UpdaterWindow {
     }
 
     renderPairControls() {
-        const paired = this.pairs.some(p => p.oldId === this.selectedOld || p.newId === this.selectedNew);
+        const samePair = !!(this.selectedOld && this.selectedNew && this.pairs.some(p => p.oldId === this.selectedOld && p.newId === this.selectedNew));
+        const pairedSingle = !!(this.selectedOld && !this.selectedNew && this.pairByTarget.has(this.selectedOld))
+            || !!(!this.selectedOld && this.selectedNew && this.pairBySource.has(this.selectedNew));
+        const canUnpair = samePair || pairedSingle;
+        const canPair = !!(this.selectedOld && this.selectedNew && !samePair);
         const ready = !this.busy && !!this.oldBook && !!this.newBook;
+        const toggleBtn = this.find('[data-pair-toggle]');
+        if (toggleBtn) {
+            toggleBtn.dataset.pairBtn = canUnpair ? 'unpair' : 'pair';
+            toggleBtn.textContent = canUnpair ? '解除配对' : '配对所选';
+            toggleBtn.disabled = !ready || (!canUnpair && !canPair);
+        }
         const setDisabled = (name, disabled) => {
             const btn = this.find(`[data-pair-btn="${name}"]`);
             if (btn) btn.disabled = disabled;
         };
-        setDisabled('pair', !ready || !this.selectedOld || !this.selectedNew);
-        setDisabled('unpair', !ready || !paired);
         setDisabled('unpair-all', !ready || !this.pairs.length);
         setDisabled('auto', !ready);
         setDisabled('auto-reset', !ready);
         const hint = this.find('.stwu-pairbar .stwu-pairhint');
-        if (hint) hint.textContent = this.selectedOld && this.selectedNew ? '已选两侧条目，可执行配对' : '点击两侧条目后，可在此配对';
+        if (hint) hint.textContent = canUnpair ? '当前条目已配对，可直接解除' : canPair ? '已选两侧条目，可执行配对' : '点击两侧条目后，可在此配对或解除';
     }
 
     renderPreview() {
         const workspace = this.find('.stwu-workspace');
         workspace.dataset.previewOpen = String(this.previewOpen);
-        workspace.dataset.split = this.splitMode || 'balanced';
-        for (const btn of this.dialog?.querySelectorAll('[data-split-btn]') ?? []) {
-            btn.setAttribute('aria-pressed', String(btn.dataset.splitBtn === workspace.dataset.split));
+        const split = this.splitMode || 'balanced';
+        workspace.dataset.split = split;
+        const splitBtn = this.find('[data-action="cycle-split"]');
+        if (splitBtn) {
+            const labels = { balanced: '高度：均分', body: '高度：正文大', list: '高度：列表大' };
+            splitBtn.textContent = labels[split] || labels.balanced;
         }
         const entries = {
             old: this.oldBook?.entries[this.selectedOld],

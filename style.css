@@ -76,7 +76,6 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-tool > summary::-webkit-details-marker { display: none; }
 .stwu-tool[open] > summary { border-color: var(--wu-quote); color: var(--wu-text); }
 .stwu-tool-content { position: absolute; z-index: 20; top: calc(100% + 5px); left: 8px; right: 8px; display: flex; width: auto; max-width: 680px; max-height: min(68dvh, 640px); margin: 0 auto; flex-direction: column; gap: 8px; overflow: auto; padding: 10px; border: 1px solid var(--wu-border); border-radius: 9px; background: var(--wu-bg); box-shadow: 0 4px 18px var(--black70a,rgba(0,0,0,.5)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-.stwu-tool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--wu-border); font-size: .88em; }
 .stwu-scope-state, .stwu-settings-state { margin-left: auto; color: var(--wu-em); font-size: .82em; }
 .stwu-pair-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .stwu-pair-actions .menu_button { min-height: 34px; padding: 4px 10px; font-size: .84em; }
@@ -145,8 +144,6 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-preview-head { display: flex; flex: 0 0 auto; min-height: 34px; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding: 3px 8px; border-bottom: 1px solid var(--wu-border); }
 .stwu-preview-head h3 { display: flex; align-items: center; gap: 6px; color: var(--wu-em); font-size: .86em; }
 .stwu-preview-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.stwu-split-group { display: inline-flex; align-items: center; gap: 3px; }
-.stwu [data-split-btn][aria-pressed="true"] { border-color: var(--wu-quote); color: var(--wu-text); font-weight: 600; }
 .stwu-preview-grid { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
 .stwu-preview-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 4px; overflow: hidden; padding: 5px 8px; }
 .stwu-preview-pane + .stwu-preview-pane { border-left: 2px solid var(--wu-border); }

@@ -46,8 +46,7 @@ function setup() {
         scopeNames: [], scopeWorks: [], scopeWorkKeys: [], pinMatches: true, busy: false,
     });
     const pairButtons = {
-        pair: { disabled: false },
-        unpair: { disabled: false },
+        toggle: { disabled: false, dataset: { pairBtn: 'pair' }, textContent: '配对所选' },
         'unpair-all': { disabled: false },
         auto: { disabled: false },
         'auto-reset': { disabled: false },
@@ -61,9 +60,9 @@ function setup() {
         '[data-list="new"]': { scrollTop: 0 },
         '[data-set-scope]': { value: 'current', selectedOptions: [{ textContent: '测试范围' }] },
         '.stwu-workspace': { dataset: { previewOpen: 'false', split: 'balanced' } },
+        '[data-action="cycle-split"]': { textContent: '高度：均分' },
         '.stwu-pairbar .stwu-pairhint': { textContent: '' },
-        '[data-pair-btn="pair"]': pairButtons.pair,
-        '[data-pair-btn="unpair"]': pairButtons.unpair,
+        '[data-pair-toggle]': pairButtons.toggle,
         '[data-pair-btn="unpair-all"]': pairButtons['unpair-all'],
         '[data-pair-btn="auto"]': pairButtons.auto,
         '[data-pair-btn="auto-reset"]': pairButtons['auto-reset'],
@@ -301,29 +300,39 @@ test('sync settings only uses specified source IDs and updates target export mir
     });
 });
 
-test('setSplitMode updates workspace split dataset and ignores unknown modes', () => {
+test('cycleSplitMode rotates height ratios with a single reused button', () => {
     const { ui, nodes } = setup();
     ui.previewOpen = true;
-    ui.setSplitMode('body');
+    ui.cycleSplitMode();
     assert.equal(ui.splitMode, 'body');
     assert.equal(nodes['.stwu-workspace'].dataset.split, 'body');
-    ui.setSplitMode('invalid-mode');
-    assert.equal(ui.splitMode, 'body');
+    assert.equal(nodes['[data-action="cycle-split"]'].textContent, '高度：正文大');
+    ui.cycleSplitMode();
+    assert.equal(ui.splitMode, 'list');
+    assert.equal(nodes['[data-action="cycle-split"]'].textContent, '高度：列表大');
+    ui.cycleSplitMode();
+    assert.equal(ui.splitMode, 'balanced');
+    assert.equal(nodes['[data-action="cycle-split"]'].textContent, '高度：均分');
 });
 
-test('renderPairControls toggles individual pair buttons directly', () => {
+test('renderPairControls reuses one button for pair and unpair based on selection', () => {
     const { ui, pairButtons } = setup();
     ui.renderPairControls();
-    assert.equal(pairButtons.pair.disabled, true);
-    assert.equal(pairButtons.unpair.disabled, true);
+    assert.equal(pairButtons.toggle.disabled, true);
+    assert.equal(pairButtons.toggle.textContent, '配对所选');
     assert.equal(pairButtons['unpair-all'].disabled, false);
     assert.equal(pairButtons.auto.disabled, false);
     ui.selectedOld = '0'; ui.selectedNew = '10';
     ui.renderPairControls();
-    assert.equal(pairButtons.pair.disabled, false);
-    assert.equal(pairButtons.unpair.disabled, false);
+    assert.equal(pairButtons.toggle.disabled, false);
+    assert.equal(pairButtons.toggle.textContent, '解除配对');
+    assert.equal(pairButtons.toggle.dataset.pairBtn, 'unpair');
     ui.runPairAction('unpair');
     assert.equal(ui.pairs.some(pair => pair.newId === '10'), false);
+    ui.renderPairControls();
+    assert.equal(pairButtons.toggle.disabled, false);
+    assert.equal(pairButtons.toggle.textContent, '配对所选');
+    assert.equal(pairButtons.toggle.dataset.pairBtn, 'pair');
 });
 
 test('renderList pins scope matches, paginates cleanly, and keeps old unpaired rows disabled', () => {
