@@ -1,4 +1,4 @@
-const VERSION = '1.13.2';
+const VERSION = '1.13.3';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -177,7 +177,7 @@ export class UpdaterWindow {
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="母本每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="母本上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="母本下一页">›</button></div>
                 </section>
                 <section class="stwu-pane" data-side="old" aria-label="目标书">
-                  <div class="stwu-pane-head"><h3>目标书</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="old" title="跳到目标书待核对条目" hidden></button><span class="stwu-count"></span></div>
+                  <div class="stwu-pane-head"><h3>目标书</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="old" title="跳到目标书待核对条目" hidden></button><button type="button" class="menu_button stwu-mini-btn" data-action="toggle-target-unpaired" title="勾选或取消目标书当前搜索结果中的未配对/待核对条目" aria-pressed="false">勾选未配对</button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择目标书" data-book="old"></select>
                   <div class="stwu-source-line"><button type="button" class="menu_button" data-action="toggle-target-selection" title="按目标书当前搜索结果批量勾选已配对条目，目标书独有条目会保留" aria-pressed="false">勾选已配对</button><button type="button" class="menu_button" data-action="target-operation" title="合并重复条目，或直接删除目标书勾选/选中的条目">合并/删除</button></div>
                   <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" title="单字按完整标题或关键词搜索" autocomplete="off">
@@ -301,6 +301,7 @@ export class UpdaterWindow {
             if (action === 'save-consolidation') this.run(() => this.saveTargetOperation());
             if (action === 'toggle-selection') this.toggleFilteredSelection();
             if (action === 'toggle-target-selection') this.toggleFilteredSelection('old');
+            if (action === 'toggle-target-unpaired') this.toggleTargetUnpaired();
             if (action === 'target-operation') this.run(() => this.openTargetOperation());
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'apply-settings') this.run(() => {
@@ -339,6 +340,7 @@ export class UpdaterWindow {
                 if (side === 'old' && !pair) {
                     if (event.target.checked) this.targetChecks.add(id);
                     else this.targetChecks.delete(id);
+                    this.renderBulkSelection();
                     this.renderSettingsInfo();
                     this.renderPairControls();
                     return;
@@ -948,6 +950,25 @@ export class UpdaterWindow {
         }).map(({ id }) => id);
     }
 
+    targetUnpairedIds() {
+        return this.filteredRows.old.map(({ id }) => id).filter(id => !this.pairByTarget.has(id));
+    }
+
+    toggleTargetUnpaired() {
+        const ids = this.targetUnpairedIds();
+        if (!ids.length) return;
+        const select = !ids.every(id => this.targetChecks.has(id));
+        for (const id of ids) {
+            if (select) this.targetChecks.add(id);
+            else this.targetChecks.delete(id);
+            const input = this.rowElements?.old?.get(String(id))?.querySelector('input[type="checkbox"]');
+            if (input) input.checked = select;
+        }
+        this.renderBulkSelection();
+        this.renderPairControls();
+        this.renderSettingsInfo();
+    }
+
     toggleFilteredSelection(side = 'new') {
         const category = side === 'new' ? this.find('[data-selection-category]') : null;
         const ids = this.bulkSelectionIds(category?.value, side);
@@ -1192,6 +1213,14 @@ export class UpdaterWindow {
             toggle.textContent = ids.length ? `${verb} ${ids.length} 条` : side === 'old' ? '勾选已配对' : '批量勾选';
             toggle.setAttribute('aria-pressed', String(allSelected));
             toggle.disabled = this.busy || !ids.length;
+        }
+        const unpairedBtn = this.find('[data-action="toggle-target-unpaired"]');
+        if (unpairedBtn) {
+            const ids = this.targetUnpairedIds();
+            const allSelected = ids.length > 0 && ids.every(id => this.targetChecks.has(id));
+            unpairedBtn.textContent = ids.length ? `${allSelected ? '取消未配对' : '勾选未配对'} ${ids.length} 条` : '勾选未配对';
+            unpairedBtn.setAttribute('aria-pressed', String(allSelected));
+            unpairedBtn.disabled = this.busy || !ids.length;
         }
     }
 
