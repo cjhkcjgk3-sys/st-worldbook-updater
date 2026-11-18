@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     applySettingsPatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate,
-    parseNameList, pickSettings, scopedEntries, setBookEntrySettings,
+    matchRosterEntries, parseNameList, pickSettings, scopedEntries, setBookEntrySettings,
 } from '../core.js';
 
 const makeBook = rows => ({ entries: Object.fromEntries(rows.map(row => [String(row.uid), row])), label: 'keep' });
@@ -125,6 +125,9 @@ test('名单识别两侧别名，缺失、重名和争抢目标的条目等待�
         row(5, '另一标题', ['专属关键词']),
     ]);
     const { groups } = parseNameList('甲=Alpha\n乙\n丙\n丁\n戊\n己\n庚\n辛\n缺失', { includeGroups: true });
+    const { reviewRows } = matchRosterEntries(target, mother, groups);
+    assert.deepEqual(reviewRows.new, new Set(['11', '12', '13', '14', '15', '17', '18']));
+    assert.deepEqual(reviewRows.old, new Set(['1', '2', '3', '4', '5']));
     const plan = buildRosterUpdate(target, mother, groups, 'full');
     assert.deepEqual(plan.replace, ['甲 / Alpha']);
     assert.deepEqual(plan.copy, ['己']);

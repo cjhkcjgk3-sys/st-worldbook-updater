@@ -57,7 +57,7 @@ function keySignature(entry) {
     return keys.length ? JSON.stringify(keys) : '';
 }
 
-function matchEntries(oldBook, newBook, inScope) {
+function matchEntries(oldBook, newBook, inScope, workKeys = []) {
     validateBook(oldBook); validateBook(newBook);
     const titles = new Map(), signatures = new Map();
     function index(map, key, id) {
@@ -137,8 +137,28 @@ function matchEntries(oldBook, newBook, inScope) {
         if (!current || resolved.score > current.score) winners.set(resolved.oldId, { ...resolved, newId: id });
         else if (resolved.score === current.score) winners.set(resolved.oldId, { ...current, newId: null });
     }
-    return [...winners.values()].filter(winner => winner.newId !== null)
+    const pairs = [...winners.values()].filter(winner => winner.newId !== null)
         .map(({ oldId, newId, reason }) => ({ oldId, newId, checked: true, reason }));
+    const usedOld = new Set(pairs.map(pair => pair.oldId)), usedNew = new Set(pairs.map(pair => pair.newId));
+    const remaining = Object.entries(newBook.entries).filter(([id, entry]) => entry.comment?.trim() && !usedNew.has(id) && (!inScope || inScope(entry)));
+    if (!remaining.length || usedOld.size === Object.keys(oldBook.entries).length) return pairs;
+
+    const sourceTitles = rosterIndex(newBook, workKeys, { includeKeywords: false });
+    const targetTitles = rosterIndex(oldBook, workKeys, { includeKeywords: false });
+    for (const [newId, source] of remaining) {
+        const targets = titleMatches(targetTitles, source.comment, workKeys);
+        if (targets.size !== 1) continue;
+        const oldId = targets.values().next().value;
+        const target = oldBook.entries[oldId];
+        if (usedOld.has(oldId) || target.comment.trim() === source.comment.trim()) continue;
+        const byKey = signatures.get(keySignature(source));
+        if (byKey && !byKey.has(oldId)) continue;
+        const sources = titleMatches(sourceTitles, target.comment, workKeys);
+        if (sources.size !== 1 || !sources.has(newId)) continue;
+        pairs.push({ oldId, newId, checked: true, reason: '全名或简称一致' });
+        usedOld.add(oldId);
+    }
+    return pairs;
 }
 
 export function autoMatch(oldBook, newBook) {
@@ -179,14 +199,15 @@ function entrySignature(entry) {
     return canonical(value);
 }
 
-export function classifyIncoming(oldBook, newBook, pairs = []) {
+export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets) {
     const result = new Map(), paired = new Set(pairs.map(p => String(p.newId)));
     const oldTitles = new Set(), oldKeys = new Set();
     for (const entry of Object.values(oldBook.entries)) {
         if (entry.comment?.trim()) oldTitles.add(entry.comment.trim());
         for (const key of entry.key || []) if (key.trim()) oldKeys.add(key.trim());
     }
-    const identityCounts = new Map();
+    const identityCounts = new Map(), reviewTitles = new Set(), reviewKeys = new Set();
+    const targetTitles = reviewTargets ? rosterIndex(oldBook, [], { includeKeywords: false }) : null;
     for (const entry of Object.values(newBook.entries)) {
         const identity = JSON.stringify([entry.comment?.trim() || '', keySignature(entry)]);
         identityCounts.set(identity, (identityCounts.get(identity) || 0) + 1);
@@ -195,9 +216,20 @@ export function classifyIncoming(oldBook, newBook, pairs = []) {
         const name = entry.comment?.trim() || '', keys = (entry.key || []).map(x => x.trim()).filter(Boolean);
         let state;
         if (paired.has(id)) state = 'paired';
-        else if ((!name && !keys.length) || oldTitles.has(name) || keys.some(k => oldKeys.has(k)) || identityCounts.get(JSON.stringify([name, keySignature(entry)])) > 1) state = 'review';
-        else state = 'new';
+        else {
+            const titleHits = targetTitles && name ? titleMatches(targetTitles, name, []) : null;
+            state = (!name && !keys.length) || oldTitles.has(name) || keys.some(k => oldKeys.has(k))
+                || identityCounts.get(JSON.stringify([name, keySignature(entry)])) > 1 || titleHits?.size ? 'review' : 'new';
+            if (titleHits) for (const targetId of titleHits) reviewTargets.add(targetId);
+        }
         result.set(id, state);
+        if (reviewTargets && state === 'review') {
+            if (name) reviewTitles.add(name);
+            for (const key of keys) reviewKeys.add(key);
+        }
+    }
+    if (reviewTargets) for (const [id, entry] of Object.entries(oldBook.entries)) {
+        if (reviewTitles.has(entry.comment?.trim()) || entry.key?.some(key => reviewKeys.has(key.trim()))) reviewTargets.add(id);
     }
     return result;
 }
@@ -645,13 +677,24 @@ function rosterHits(index, keys, shortKeys = []) {
     return hits;
 }
 
+function titleMatches(index, title, workKeys) {
+    const short = shortNameKey(title, workKeys);
+    return rosterHits(index, exactNameKeys(title, workKeys), short ? [short] : []);
+}
+
 export function matchRosterEntries(oldBook, newBook, groups, {
     workKeys = [], manualPairs = [], unpairedOld = new Set(), unpairedNew = new Set(),
 } = {}) {
     const sourceIndex = rosterIndex(newBook, workKeys);
     const targetIndex = rosterIndex(oldBook, workKeys, { target: true });
     const targetTitles = rosterIndex(oldBook, workKeys, { target: true, includeKeywords: false });
-    const targetSignatures = new Set(Object.values(oldBook.entries).map(keySignature).filter(Boolean));
+    const targetSignatures = new Map();
+    for (const [id, entry] of Object.entries(oldBook.entries)) {
+        const signature = keySignature(entry);
+        if (!signature) continue;
+        if (!targetSignatures.has(signature)) targetSignatures.set(signature, []);
+        targetSignatures.get(signature).push(id);
+    }
     const sourceSignatureCounts = new Map();
     for (const source of Object.values(newBook.entries)) {
         const signature = keySignature(source);
@@ -660,13 +703,22 @@ export function matchRosterEntries(oldBook, newBook, groups, {
     const overrides = new Map(manualPairs.map(pair => [pair.newId, pair.oldId]));
     const manualOwners = new Map(manualPairs.map(pair => [pair.oldId, pair.newId]));
     const entries = new Map(), review = [], missing = [];
+    const reviewRows = { new: new Set(), old: new Set() };
+    const addReview = (message, sources, targets = []) => {
+        review.push(message);
+        for (const id of sources) reviewRows.new.add(id);
+        for (const id of targets) reviewRows.old.add(id);
+    };
     for (const aliases of groups) {
         const name = aliases.join(' / ');
         const keys = aliases.flatMap(alias => exactNameKeys(alias, workKeys));
         const shortKeys = aliases.map(alias => shortNameKey(alias, workKeys)).filter(Boolean);
         const sources = rosterHits(sourceIndex, keys, shortKeys);
         if (!sources.size) { missing.push(name); continue; }
-        if (sources.size > 1) { review.push(`${name}（母本有多个匹配条目）`); continue; }
+        if (sources.size > 1) {
+            addReview(`${name}（母本有多个匹配条目）`, sources, rosterHits(targetIndex, keys, shortKeys));
+            continue;
+        }
         const newId = sources.values().next().value;
         if (!entries.has(newId)) entries.set(newId, { name, keys: new Set(), shortKeys: new Set() });
         for (const key of keys) entries.get(newId).keys.add(key);
@@ -694,20 +746,20 @@ export function matchRosterEntries(oldBook, newBook, groups, {
             targets.add(overrides.get(newId));
         }
         if (unpairedNew.has(newId) || [...targets].some(id => unpairedOld.has(id))) {
-            review.push(`${item.name}（已手动解除配对）`);
+            addReview(`${item.name}（已手动解除配对）`, [newId], targets);
         } else if ([...targets].some(id => manualOwners.has(id) && manualOwners.get(id) !== newId)) {
-            review.push(`${item.name}（目标条目已有其他手动配对）`);
+            addReview(`${item.name}（目标条目已有其他手动配对）`, [newId], targets);
         } else if (targets.size > 1) {
-            review.push(`${item.name}（目标书有多个匹配条目）`);
+            addReview(`${item.name}（目标书有多个匹配条目）`, [newId], targets);
         } else if (!targets.size) {
             const signature = keySignature(source);
             if (sourceSignatureCounts.get(signature) === 1 && targetSignatures.has(signature)) {
-                review.push(`${item.name}（目标书有主关键词完全相同、标题不同的条目）`);
+                addReview(`${item.name}（目标书有主关键词完全相同、标题不同的条目）`, [newId], targetSignatures.get(signature));
             } else additions.push(newId);
         } else {
             const oldId = targets.values().next().value;
             if (!overrides.has(newId) && !namedTargets.has(oldId) && oldBook.entries[oldId].comment?.trim()) {
-                review.push(`${item.name}（目标条目只有关键词命中，标题不同）`);
+                addReview(`${item.name}（目标条目只有关键词命中，标题不同）`, [newId], targets);
                 continue;
             }
             matched.push({ oldId, newId, checked: true, reason: '名单匹配' });
@@ -717,10 +769,10 @@ export function matchRosterEntries(oldBook, newBook, groups, {
 
     const pairs = matched.filter(pair => {
         if (claims.get(pair.oldId) === 1) return true;
-        review.push(`${entries.get(pair.newId).name}（与另一角色匹配到同一目标条目）`);
+        addReview(`${entries.get(pair.newId).name}（与另一角色匹配到同一目标条目）`, [pair.newId], [pair.oldId]);
         return false;
     });
-    return { pairs, additions, namesById: new Map([...entries].map(([id, item]) => [id, item.name])), review, missing };
+    return { pairs, additions, namesById: new Map([...entries].map(([id, item]) => [id, item.name])), review, reviewRows, missing };
 }
 
 export function buildRosterUpdate(oldBook, newBook, groups, mode, options) {
@@ -754,10 +806,9 @@ export function unmatchedNames(book, names, workKeys = []) {
  * 只影响插件列表的显示，不写回世界书；名单清空或匹配断开即恢复原顺序。
  */
 /**
- * 置顶块先排已勾选的配对，再排其他配对和名单命中。每组都按母本原顺序。
- * 名单为空时只认配对，不能把整本都当成命中。
+ * 置顶块先排已勾选的配对，再排待核对，最后排其他配对和名单命中。
  */
-export function pinBlock(entries, pairs, side, scopedIds = [], isChecked = pair => pair.checked === true) {
+export function pinBlock(entries, pairs, side, scopedIds = [], isChecked = pair => pair.checked === true, reviewIds = []) {
     const scoped = new Set((scopedIds || []).map(String));
     const pairByNew = new Map((pairs || []).map(pair => [String(pair.newId), pair]));
     const checked = [], other = [];
@@ -768,7 +819,7 @@ export function pinBlock(entries, pairs, side, scopedIds = [], isChecked = pair 
         const group = pair && isChecked(pair) ? checked : other;
         group.push(String(side === 'new' ? id : pair.oldId));
     }
-    return [...checked, ...other];
+    return [...new Set([...checked, ...reviewIds, ...other])];
 }
 
 export function orderWithPinned(entries, blockIds) {
@@ -791,5 +842,5 @@ export function orderWithPinned(entries, blockIds) {
 // 名单只限制来源范围；与整本匹配共用相同的身份和冲突判定。
 export function autoMatchScoped(oldBook, newBook, names, workKeys = []) {
     if (!names?.length) return autoMatch(oldBook, newBook);
-    return matchEntries(oldBook, newBook, entry => scopeMatch(entry, names, workKeys));
+    return matchEntries(oldBook, newBook, entry => scopeMatch(entry, names, workKeys), workKeys);
 }
