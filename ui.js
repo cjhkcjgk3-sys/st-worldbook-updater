@@ -1,7 +1,7 @@
-const VERSION = '1.13.1';
+const VERSION = '1.13.2';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
 const entryIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
@@ -162,6 +162,7 @@ export class UpdaterWindow {
                 <option value="paired">已配对</option><option value="review">待核对</option><option value="new">可新增</option>
               </select>
               <button type="button" class="menu_button" data-action="toggle-selection" aria-pressed="false">批量勾选</button>
+              <button type="button" class="menu_button" data-quick-pair data-pair-btn="pair" title="将当前两侧选中的条目配对，或解除已配对" disabled>快速配对</button>
               <span class="stwu-selection stwu-selection-compact" data-selection-summary="compact" aria-live="polite"></span>
             </div>
             <div class="stwu-workspace" data-preview-open="false" data-split="balanced">
@@ -178,7 +179,7 @@ export class UpdaterWindow {
                 <section class="stwu-pane" data-side="old" aria-label="目标书">
                   <div class="stwu-pane-head"><h3>目标书</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="old" title="跳到目标书待核对条目" hidden></button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择目标书" data-book="old"></select>
-                  <div class="stwu-source-line"><button type="button" class="menu_button" data-action="toggle-target-selection" title="按目标书当前搜索结果批量勾选已配对条目，目标书独有条目会保留" aria-pressed="false">勾选已配对</button></div>
+                  <div class="stwu-source-line"><button type="button" class="menu_button" data-action="toggle-target-selection" title="按目标书当前搜索结果批量勾选已配对条目，目标书独有条目会保留" aria-pressed="false">勾选已配对</button><button type="button" class="menu_button" data-action="target-operation" title="合并重复条目，或直接删除目标书勾选/选中的条目">合并/删除</button></div>
                   <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" title="单字按完整标题或关键词搜索" autocomplete="off">
                   <ol class="stwu-list" data-list="old" aria-label="目标书条目"></ol>
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="old" aria-label="目标书每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="old:-1" aria-label="目标书上一页">‹</button><span data-page-status="old">0 / 0</span><button type="button" class="menu_button" data-page-step="old:1" aria-label="目标书下一页">›</button></div>
@@ -265,16 +266,9 @@ export class UpdaterWindow {
             if (!action || this.busy) return;
             if (action === 'close') this.hide();
             if (action === 'cycle-split') this.cycleSplitMode();
-            if (action === 'close-preview') { this.previewOpen = false; this.renderPreview(); }
+            if (action === 'close-preview') { this.previewOpen = false; this.clearManualHeights(); this.renderPreview(); }
             if (action === 'toggle-size') {
-                const expanded = !this.dialog.classList.contains('stwu-expanded');
-                this.dialog.classList.toggle('stwu-expanded', expanded);
-                const button = this.find('[data-action="toggle-size"]');
-                button.setAttribute('aria-expanded', String(expanded));
-                button.setAttribute('aria-label', expanded ? '还原窗口' : '放大窗口');
-                button.title = expanded ? '还原窗口' : '放大窗口';
-                button.querySelector('i').className = `fa-solid ${expanded ? 'fa-compress' : 'fa-expand'}`;
-                this.syncViewport();
+                this.setExpanded(!this.dialog.classList.contains('stwu-expanded'));
             }
             if (action === 'reload') { this.closeTools(); this.run(() => this.reload()); }
             if (action === 'swap-sides') {
@@ -307,6 +301,7 @@ export class UpdaterWindow {
             if (action === 'save-consolidation') this.run(() => this.saveTargetOperation());
             if (action === 'toggle-selection') this.toggleFilteredSelection();
             if (action === 'toggle-target-selection') this.toggleFilteredSelection('old');
+            if (action === 'target-operation') this.run(() => this.openTargetOperation());
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'apply-settings') this.run(() => {
                 const operation = this.find('[data-set-operation]').value;
@@ -316,7 +311,15 @@ export class UpdaterWindow {
         for (const side of ['old', 'new']) {
             this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
             this.on(this.find(`[data-review-jump="${side}"]`), 'click', () => this.jumpToReview(side));
-            this.on(this.find(`[data-search="${side}"]`), 'input', () => { this.page[side] = 1; this.renderList(side); this.renderControls(); });
+            this.on(this.find(`[data-search="${side}"]`), 'input', () => {
+                clearTimeout(this.searchTimers?.[side]);
+                const count = Object.keys(this[side === 'old' ? 'oldBook' : 'newBook']?.entries ?? {}).length;
+                const applySearch = () => { this.page[side] = 1; this.renderList(side); this.renderControls(); };
+                if (count > 100) {
+                    this.searchTimers ??= {};
+                    this.searchTimers[side] = setTimeout(applySearch, 120);
+                } else applySearch();
+            });
             this.on(this.find(`[data-page-size="${side}"]`), 'change', event => { this.pageSize[side] = Number(event.target.value) || 25; this.page[side] = 1; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls(); });
             for (const btn of this.dialog.querySelectorAll(`[data-page-step^="${side}:"]`)) {
                 this.on(btn, 'click', event => {
@@ -337,6 +340,7 @@ export class UpdaterWindow {
                     if (event.target.checked) this.targetChecks.add(id);
                     else this.targetChecks.delete(id);
                     this.renderSettingsInfo();
+                    this.renderPairControls();
                     return;
                 }
                 if (!this.selectionCountsValid) this.refreshSelectionCounts();
@@ -386,6 +390,18 @@ export class UpdaterWindow {
         this.selectors(); this.render();
     }
 
+    setExpanded(expanded) {
+        this.dialog.classList.toggle('stwu-expanded', expanded);
+        const button = this.find('[data-action="toggle-size"]');
+        if (button) {
+            button.setAttribute('aria-expanded', String(expanded));
+            button.setAttribute('aria-label', expanded ? '还原窗口' : '放大窗口');
+            button.title = expanded ? '还原窗口' : '放大窗口';
+            button.querySelector('i').className = `fa-solid ${expanded ? 'fa-compress' : 'fa-expand'}`;
+        }
+        this.syncViewport();
+    }
+
     async open() {
         if (this.dialog.open || this.disposed) return;
         this.previousFocus = document.activeElement;
@@ -411,14 +427,18 @@ export class UpdaterWindow {
         }
     }
 
-    setSplitMode(mode) {
-        if (!['list', 'balanced', 'body'].includes(mode)) return;
-        this.splitMode = mode;
+    clearManualHeights() {
         for (const cls of ['.stwu-entry-window', '.stwu-body-window']) {
             const panel = this.find(cls);
             panel?.style?.removeProperty('height');
             panel?.style?.removeProperty('flex');
         }
+    }
+
+    setSplitMode(mode) {
+        if (!['list', 'balanced', 'body'].includes(mode)) return;
+        this.splitMode = mode;
+        this.clearManualHeights();
         this.renderPreview();
     }
 
@@ -1212,10 +1232,10 @@ export class UpdaterWindow {
         const canUnpair = samePair || pairedSingle;
         const canPair = !!(this.selectedOld && this.selectedNew && !samePair);
         const ready = !this.busy && !!this.oldBook && !!this.newBook;
-        const toggleBtn = this.find('[data-pair-toggle]');
-        if (toggleBtn) {
+        for (const toggleBtn of [this.find('[data-pair-toggle]'), this.find('[data-quick-pair]')].filter(Boolean)) {
+            const isQuick = toggleBtn.hasAttribute?.('data-quick-pair');
             toggleBtn.dataset.pairBtn = canUnpair ? 'unpair' : 'pair';
-            toggleBtn.textContent = canUnpair ? '解除配对' : '配对所选';
+            toggleBtn.textContent = canUnpair ? (isQuick ? '快速解除' : '解除配对') : (isQuick ? '快速配对' : '配对所选');
             toggleBtn.disabled = !ready || (!canUnpair && !canPair);
         }
         const setDisabled = (name, disabled) => {
@@ -1225,7 +1245,12 @@ export class UpdaterWindow {
         setDisabled('unpair-all', !ready || !this.pairs.length);
         setDisabled('auto', !ready);
         setDisabled('auto-reset', !ready);
-        setDisabled('consolidate', !ready || !this.selectedNew || this.service.requiresReload || this.sameNamedBook());
+        const hasTargetSelection = !!(this.oldBook && (this.oldBook.entries[this.selectedOld] || this.targetChecks.size));
+        const hasMotherMatch = !!(ready && !this.sameNamedBook() && this.newBook?.entries[this.selectedNew]);
+        const canTargetOp = !this.busy && !!this.oldBook && !this.service.requiresReload && (hasMotherMatch || hasTargetSelection);
+        setDisabled('consolidate', !canTargetOp);
+        const targetOpBtn = this.find('[data-action="target-operation"]');
+        if (targetOpBtn) targetOpBtn.disabled = !canTargetOp;
         const hint = this.find('.stwu-pairbar .stwu-pairhint');
         if (hint) hint.textContent = canUnpair ? '当前条目已配对，可直接解除' : canPair ? '已选两侧条目，可执行配对' : '点击两侧条目后，可在此配对或解除';
     }
@@ -1327,22 +1352,41 @@ export class UpdaterWindow {
     }
 
     openTargetOperation() {
-        const newId = this.selectedNew;
-        if (this.sameNamedBook() || !this.oldBook || !this.newBook?.entries[newId]) return;
-        const matches = new Set(consolidationCandidates(this.oldBook, this.newBook, newId, this.scopeWorkKeys));
-        if (!matches.size) { this.message('目标书没有可核对的匹配条目。'); return; }
-        this.targetOperation = { target: this.oldName, before: this.oldBook, mother: this.newBook, newId, mode: this.mode };
-        this.find('[data-consolidate-context]').textContent = `母本条目「${title(this.newBook.entries[newId])}」 · 目标书「${this.oldName}」`;
-        this.find('[data-target-operation]').value = 'consolidate';
+        if (!this.oldBook) return;
+        const newId = !this.sameNamedBook() && this.newBook?.entries[this.selectedNew] ? this.selectedNew : null;
+        const matched = newId ? consolidationCandidates(this.oldBook, this.newBook, newId, this.scopeWorkKeys) : [];
+        const matches = new Set(matched);
+        if (newId) {
+            const linked = this.pairForSource(newId);
+            if (linked && this.oldBook.entries[linked.oldId]) matches.add(linked.oldId);
+            if (matches.size && this.oldBook.entries[this.selectedOld]) matches.add(this.selectedOld);
+        }
+        const directIds = [...new Set([...this.targetChecks, ...(this.oldBook.entries[this.selectedOld] ? [this.selectedOld] : [])])];
+        const isMatched = matches.size > 0;
+        const candidateIds = isMatched ? matches : new Set(directIds);
+        if (!candidateIds.size) {
+            this.message('目标书没有可核对的匹配条目；如需直接删除，请先在目标书勾选或点选条目。');
+            return;
+        }
+        this.targetOperation = isMatched
+            ? { kind: 'matched', target: this.oldName, before: this.oldBook, mother: this.newBook, newId, mode: this.mode, matchedIds: new Set(matched) }
+            : { kind: 'direct', target: this.oldName, before: this.oldBook, mother: this.newBook, newId: null, mode: this.mode, matchedIds: new Set() };
+        this.find('[data-consolidate-context]').textContent = isMatched
+            ? `母本条目「${title(this.newBook.entries[newId])}」 · 目标书「${this.oldName}」`
+            : `目标书「${this.oldName}」 · 直接删除所选条目（共 ${candidateIds.size} 条）`;
+        const opSelect = this.find('[data-target-operation]');
+        opSelect.value = isMatched && matches.size >= 2 ? 'consolidate' : 'delete';
         const keep = this.find('[data-consolidate-keep]');
         const labels = document.createDocumentFragment(), rows = document.createDocumentFragment();
+        const preChecked = !isMatched ? candidateIds : (opSelect.value === 'delete' ? new Set(directIds) : new Set());
         for (const { id, entry } of listEntries(this.oldBook)) {
-            if (!matches.has(id)) continue;
+            if (!candidateIds.has(id)) continue;
             const name = `${title(entry)} · UID ${id}`;
             labels.append(new Option(name, id));
             const row = element('li', 'stwu-consolidate-candidate');
             const label = element('label'), check = element('input');
             check.type = 'checkbox';
+            check.checked = preChecked.has(id);
             check.dataset.consolidateRemove = id;
             label.append(check, element('span', '', name));
             row.append(label);
@@ -1351,8 +1395,8 @@ export class UpdaterWindow {
             rows.append(row);
         }
         keep.replaceChildren(labels);
-        const linked = this.pairForSource(newId);
-        if (matches.has(linked?.oldId)) keep.value = linked.oldId;
+        const linked = newId ? this.pairForSource(newId) : null;
+        if (isMatched && matches.has(linked?.oldId)) keep.value = linked.oldId;
         this.find('[data-consolidate-candidates]').replaceChildren(rows);
         this.find('[data-consolidate-dialog]').showModal();
         this.renderTargetOperation();
@@ -1369,6 +1413,10 @@ export class UpdaterWindow {
 
     renderTargetOperation() {
         if (!this.targetOperation) return;
+        const directOnly = this.targetOperation.kind === 'direct';
+        const opSelect = this.find('[data-target-operation]');
+        if (directOnly) opSelect.value = 'delete';
+        opSelect.disabled = this.busy || directOnly;
         const { deleting, retained, oldIds } = this.targetOperationSelection();
         const label = this.find('[data-consolidate-keep-label]');
         label.hidden = deleting;
@@ -1399,21 +1447,24 @@ export class UpdaterWindow {
         if (!oldIds.length) return;
         this.targetOperation = null;
         this.find('[data-consolidate-dialog]').close();
-        const { target, before, mother, newId, mode } = operation;
-        if (target !== this.oldName || before !== this.oldBook || mother !== this.newBook || this.sameNamedBook()) {
+        const { kind, target, before, mother, newId, mode, matchedIds } = operation;
+        if (target !== this.oldName || before !== this.oldBook || (kind === 'matched' && (mother !== this.newBook || this.sameNamedBook()))) {
             throw new Error('世界书在预览后已变化，请重新选择条目。');
         }
         const result = deleting
-            ? buildMatchedDeletion(before, mother, { newId, oldIds }, this.scopeWorkKeys)
+            ? (kind === 'matched' && oldIds.every(id => matchedIds.has(id))
+                ? buildMatchedDeletion(before, mother, { newId, oldIds }, this.scopeWorkKeys)
+                : buildDirectDeletion(before, oldIds))
             : buildConsolidation(before, mother, { newId, oldId: retained, duplicateOldIds: oldIds }, mode, this.scopeWorkKeys);
         this.message('正在保存并核验目标书…');
         const saved = await this.saveTargetFromMother(result.data, operation);
         this.oldBook = saved.data;
+        if (this.sameNamedBook()) this.newBook = saved.data;
         const removed = new Set(result.removedOldIds);
         this.pairs = this.pairs.filter(pair => !removed.has(pair.oldId)
             && (deleting || (pair.oldId !== retained && pair.newId !== newId)));
         for (const id of removed) this.unpairedOld.delete(id);
-        if (!deleting) {
+        if (!deleting && newId) {
             this.pairs.push({ oldId: retained, newId, checked: false, reason: '手动配对' });
             this.unpairedOld.delete(retained);
             this.unpairedNew.delete(newId);
@@ -1481,6 +1532,7 @@ export class UpdaterWindow {
         this.events.abort();
         this.dialog.close(); this.dialog.remove();
         for (const timer of this.timers) clearTimeout(timer);
+        if (this.searchTimers) for (const timer of Object.values(this.searchTimers)) clearTimeout(timer);
         for (const url of this.urls) URL.revokeObjectURL(url);
         this.timers.clear(); this.urls.clear();
         this.service.close();

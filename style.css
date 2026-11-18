@@ -128,8 +128,8 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-pane-head { display: flex; flex: 0 0 auto; min-height: 28px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
 .stwu-count { color: var(--wu-em); font-size: .78em; white-space: nowrap; }
 .stwu .stwu-review-jump { width: auto; min-height: 24px; padding: 1px 4px; color: var(--wu-quote); font-size: .74em; white-space: nowrap; }
-.stwu-source-line { display: flex; flex: 0 0 auto; min-height: 36px; align-items: center; color: var(--wu-em); font-size: .78em; }
-.stwu-source-line > button.menu_button { width: 100%; white-space: nowrap; }
+.stwu-source-line { display: flex; flex: 0 0 auto; gap: 6px; min-height: 36px; align-items: center; color: var(--wu-em); font-size: .78em; }
+.stwu-source-line > button.menu_button { flex: 1 1 0; min-width: 0; white-space: nowrap; }
 .stwu-list { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0; list-style: none; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
 .stwu-entry { display: flex; align-items: stretch; margin: 0 0 3px; overflow: hidden; background: var(--black30a, rgba(0,0,0,.3)); }
 .stwu-entry.wi-card-entry { padding: 0 4px; border-color: var(--wu-border); border-radius: 7px; }
@@ -189,7 +189,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-consolidate-candidate small { color: var(--wu-em); }
 
 @media (max-width: 680px) {
-  dialog.stwu-dialog.popup { width: calc(100vw - 16px); height: clamp(320px, calc(var(--wu-vh,100dvh) - 16px), 100dvh); max-width: calc(100vw - 16px); max-height: calc(var(--wu-vh,100dvh) - 16px); padding: 4px 7px; }
+  dialog.stwu-dialog.popup { width: calc(100vw - 8px); height: clamp(320px, calc(var(--wu-vh,100dvh) - 8px), 100dvh); max-width: calc(100vw - 8px); max-height: calc(var(--wu-vh,100dvh) - 8px); padding: 4px 6px; }
   dialog.stwu-dialog.popup.stwu-expanded { width: 100vw; height: var(--wu-vh,100dvh); max-width: 100vw; max-height: var(--wu-vh,100dvh); padding: max(4px,env(safe-area-inset-top)) 7px max(4px,env(safe-area-inset-bottom)); border: 0; border-radius: 0; }
   .stwu-header { gap: 5px; padding: max(6px,env(safe-area-inset-top)) 5px 6px; }
   .stwu-header h2 { font-size: 1em; }
@@ -218,8 +218,8 @@ dialog.stwu-dialog.popup.stwu-expanded {
   .stwu-entry { margin-bottom: 2px; }
   .stwu-entry-check { flex-basis: 30px; min-height: 38px; }
   .stwu button.stwu-entry-button { min-height: 40px; padding: 4px; }
-  .stwu-entry-title { font-size: .78em; }
-  .stwu-entry-status { font-size: .67em; }
+  .stwu-entry-title { font-size: max(13px, .86em); }
+  .stwu-entry-status { font-size: max(11px, .74em); }
   .stwu-pagebar { min-height: 31px; gap: 1px; font-size: .64em; }
   .stwu .stwu-pagebar select.text_pole { width: 42px; min-height: 26px; height: 26px; }
   .stwu-pagebar .menu_button { width: 24px; min-width: 24px; min-height: 26px; height: 26px; }
@@ -229,8 +229,9 @@ dialog.stwu-dialog.popup.stwu-expanded {
   .stwu-preview-head h3 { font-size: .78em; }
   .stwu .stwu-mini-btn { min-height: 24px; height: 24px; padding: 1px 6px; font-size: .7em; }
   .stwu-preview-pane { gap: 2px; padding: 3px 5px; }
-  .stwu-preview-pane h4 { font-size: .73em; }
-  .stwu-preview-keys { font-size: .65em; }
+  .stwu-preview-pane h4 { font-size: max(12.5px, .82em); }
+  .stwu-preview-keys { font-size: max(11px, .72em); }
+  .stwu pre.stwu-content { font-size: max(13px, .86em); }
   .stwu-preview-grid { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
   .stwu-footer { gap: 5px; padding: 4px 5px max(4px,env(safe-area-inset-bottom)); }
   .stwu-replace-scope { gap: 4px; font-size: .7em; }

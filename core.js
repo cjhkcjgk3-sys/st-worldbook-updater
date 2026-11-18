@@ -495,6 +495,17 @@ export function buildMatchedDeletion(oldBook, newBook, group, workKeys = []) {
     return removeMatchedTargets(clone(oldBook), removedOldIds);
 }
 
+export function buildDirectDeletion(oldBook, oldIds) {
+    validateBook(oldBook);
+    const isEntryId = id => typeof id === 'string' || typeof id === 'number';
+    if (!Array.isArray(oldIds) || !oldIds.length) throw new Error('请至少选择一条要移除的目标书条目。');
+    if (!oldIds.every(isEntryId)) throw new Error('所选条目编号不正确。');
+    const removedOldIds = oldIds.map(String);
+    if (new Set(removedOldIds).size !== removedOldIds.length) throw new Error('所选目标书条目不可重复。');
+    if (!removedOldIds.every(id => own(oldBook.entries, id))) throw new Error('所选条目已不存在，请重新载入。');
+    return removeMatchedTargets(clone(oldBook), removedOldIds);
+}
+
 
 // ---- 条目注入设置（只动设置，不动标题/关键词/正文） ----
 export const SETTINGS_FIELDS = Object.freeze([

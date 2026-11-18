@@ -1095,6 +1095,24 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        const { page, ctx } = await prepare();
+        // 不选中母本条目，直接在目标书侧勾选独有条目 uid 4 并通过目标栏「合并/删除」按钮直接删除
+        assert.equal(await page.locator('[data-action="target-operation"]').isDisabled(), true);
+        await page.locator('[data-list="old"] [data-id="4"] input').check();
+        assert.equal(await page.locator('[data-action="target-operation"]').isDisabled(), false);
+        await page.locator('[data-action="target-operation"]').click();
+        await page.locator('[data-consolidate-dialog]').waitFor({ state: 'visible' });
+        assert.equal(await page.locator('[data-target-operation]').isDisabled(), true);
+        assert.equal(await page.locator('[data-target-operation]').inputValue(), 'delete');
+        assert.equal(await page.locator('[data-consolidate-remove="4"]').isChecked(), true);
+        await page.locator('[data-action="save-consolidation"]').click();
+        await page.waitForFunction(() => /^已核验并删除 1 条目标条目/.test(document.querySelector('.stwu-notice').textContent));
+        assert.equal(state.books.get('演示_目标书').entries['4'], undefined);
+        results.push('未选母本时目标书侧直接勾选并删除条目通过');
+        await ctx.close();
+    }
+
     const report = { pass: true, browser: await browser.version(), results };
     if (process.env.REPORT_FILE) await fs.writeFile(process.env.REPORT_FILE, JSON.stringify(report, null, 2) + '\n');
     console.log(JSON.stringify(report, null, 2));

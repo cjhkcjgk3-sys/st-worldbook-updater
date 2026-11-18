@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, buildConsolidation, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, scopeMatch, workKeysOf } from '../core.js';
+import { autoMatch, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, scopeMatch, workKeysOf } from '../core.js';
 
 const e = (uid, comment, key, content = '正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(entry => [String(entry.uid), entry])) });
@@ -366,4 +366,23 @@ test('按匹配删除只移除勾选的目标书记录和镜像，允许只删�
         [[0, 2], /无法确认/],
     ]) assert.throws(() => buildMatchedDeletion(old, source, { newId: 0, oldIds }), error);
     assert.deepEqual([old, source], snapshots);
+});
+
+test('直接删除目标条目不依赖母本匹配，同步清理导出镜像并拒绝非法输入', () => {
+    const old = book(
+        e(0, '角色甲（旧）', ['角色甲'], '删掉'),
+        e(1, '角色乙', ['角色乙'], '保留'),
+    );
+    old.originalData = { entries: [{ id: 0 }, { id: 1 }] };
+    const snapshot = clone(old);
+    const result = buildDirectDeletion(old, ['0']);
+    assert.deepEqual(Object.keys(result.data.entries), ['1']);
+    assert.deepEqual(result.data.originalData.entries, [{ id: 1 }]);
+    assert.equal(result.removed, 1);
+    assert.deepEqual(old, snapshot);
+    for (const [oldIds, error] of [
+        [[], /至少选择一条/],
+        [[0, '0'], /不可重复/],
+        [['404'], /已不存在/],
+    ]) assert.throws(() => buildDirectDeletion(old, oldIds), error);
 });
