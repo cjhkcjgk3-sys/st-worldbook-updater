@@ -9,20 +9,34 @@ test('不同编号仍可用标题和无序完整关键词一对一配对', () =>
     const a = book(e(0, '人物', ['A', 'B'])), b = book(e(900, '人物', ['B', 'A'], '新正文'));
     assert.deepEqual(autoMatch(a, b), [{ oldId: '0', newId: '900', checked: true, reason: '标题与关键词' }]);
 });
-test('仅唯一标题或完整关键词可定位；部分关键词不自动配对', () => {
+test('标题与主关键词要相符，缺少标题时才单独使用完整主关键词', () => {
     const a = book(e(0, '名称', ['A', 'B']));
-    assert.equal(autoMatch(a, book(e(5, '名称', ['C']))).length, 1);
-    assert.equal(autoMatch(a, book(e(5, '另一个名称', ['A', 'B']))).length, 1);
+    assert.equal(autoMatch(a, book(e(5, '名称', ['C']))).length, 0);
+    assert.equal(autoMatch(a, book(e(5, '名称', ['B', 'C']))).length, 1);
+    assert.equal(autoMatch(a, book(e(5, '另一个名称', ['A', 'B']))).length, 0);
+    assert.equal(autoMatch(a, book(e(5, '', ['A', 'B']))).length, 1);
     assert.equal(autoMatch(a, book(e(5, '另一个名称', ['A']))).length, 0);
 });
 test('整本配对可识别尼可的唯一简称，重名或仅部分主关键词重叠时保持待核对', () => {
     const mother = book(e(10, '尼可·莱恩', ['尼可·莱恩', '魔女「N」', '喧寂于心']));
     const nico = e(1, '尼可', ['尼可·莱恩', '魔女N', '尼可']);
     const target = book(nico);
-    assert.deepEqual(autoMatch(target, mother), [{ oldId: '1', newId: '10', checked: true, reason: '全名或简称一致' }]);
+    assert.deepEqual(autoMatch(target, mother), [{ oldId: '1', newId: '10', checked: true, reason: '名称与主关键词一致' }]);
     assert.deepEqual(autoMatch(book(nico, e(2, '尼可', ['另一个关键词'])), mother), []);
     assert.deepEqual(autoMatch(target, book(mother.entries['10'], e(11, '尼可·另一人', ['其他']))), []);
+    assert.deepEqual(autoMatch(book(e(1, '尼可', ['尼可·另一人'])), mother), []);
     assert.deepEqual(autoMatch(book(e(2, '另一位魔女', ['魔女「N」', '另一别名'])), mother), []);
+});
+test('整本配对单字简称依靠独立主关键词，关键词冲突或打平时留待核对', () => {
+    const mother = book(e(9, '琴·古恩希尔德', ['琴', '蒲公英骑士'], '相同正文', { keysecondary: ['只在次要关键词'] }));
+    const unrelated = e(1, '琴', ['琴', '只在次要关键词'], '相同正文');
+    const nico = e(2, '琴', ['琴', '蒲公英骑士']);
+    assert.deepEqual(autoMatch(book(unrelated), mother), []);
+    assert.deepEqual(autoMatch(book(e(2, '琴', [])), book(e(10, '琴', []))), []);
+    assert.deepEqual(autoMatch(book(e(2, '琴', ['琴'])), book(e(10, '琴', ['琴']))), []);
+    assert.deepEqual(autoMatch(book(e(2, '琴', ['原神·琴'])), book(e(10, '琴', ['原神·琴']))), []);
+    assert.deepEqual(autoMatch(book(unrelated, nico), mother).map(pair => pair.oldId), ['2']);
+    assert.deepEqual(autoMatch(book(nico, e(3, '琴', ['蒲公英骑士'])), mother), []);
 });
 test('空标题、空关键词和碰巧相同 uid 不建立配对', () => {
     assert.equal(autoMatch(book(e(0, '', [])), book(e(0, '', []))).length, 0);

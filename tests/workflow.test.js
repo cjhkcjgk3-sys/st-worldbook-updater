@@ -36,8 +36,8 @@ test('匹配哥伦比娅的四字简称与译名异写，并识别菲谢尔合�
 test('丽莎的简称、全名、作品前缀可在母本、目标书和名单互换', () => {
     const names = ['丽莎', '丽莎·敏兹', '原神·丽莎'];
     for (const motherName of names) for (const targetName of names) for (const name of names) {
-        const mother = makeBook([{ uid: 10, comment: motherName, content: '完整正文' }]);
-        const target = makeBook([{ uid: 0, comment: targetName, content: '' }]);
+        const mother = makeBook([{ uid: 10, comment: motherName, key: ['蔷薇魔女'], content: '完整正文' }]);
+        const target = makeBook([{ uid: 0, comment: targetName, key: ['蔷薇魔女'], content: '' }]);
         const plan = buildRosterUpdate(target, mother, [[name]], 'content');
         assert.deepEqual(plan.replace, [name], JSON.stringify({ motherName, targetName, name }));
         assert.equal(plan.result.added, 0);
@@ -74,9 +74,24 @@ test('琴与琴·古恩希尔德配对，单字简称遇到多条全名时待核
         assert.equal(plan.result.added, 0);
         assert.equal(plan.result.data.entries[0].content, '完整正文');
     }
-    const conflict = buildRosterUpdate(target, makeBook([jean, { ...jean, uid: 11, comment: '琴·另一人', key: [] }]), [['琴']], 'content');
+    const resolved = buildRosterUpdate(target, makeBook([jean, { ...jean, uid: 11, comment: '琴·另一人', key: ['琴'] }]), [['琴']], 'content');
+    assert.deepEqual(resolved.replace, ['琴']);
+    const conflict = buildRosterUpdate(target, makeBook([jean, { ...jean, uid: 11, comment: '琴·另一人' }]), [['琴']], 'content');
     assert.match(conflict.review[0], /母本有多个匹配/);
     assert.equal(conflict.result.updated + conflict.result.added, 0);
+});
+
+test('定点名单单字证据不足不替换也不误复制，明确主关键词可从空目标添加', () => {
+    const jean = { uid: 10, comment: '琴·古恩希尔德', key: ['蒲公英骑士'], content: '新正文' };
+    const existing = makeBook([{ uid: 0, comment: '琴', key: ['弦乐器'], content: '旧正文' }]);
+    for (const target of [existing, makeBook([])]) {
+        const plan = buildRosterUpdate(target, makeBook([jean]), [['琴']], 'content');
+        assert.match(plan.review[0], /主关键词佐证/);
+        assert.equal(plan.result.updated + plan.result.added, 0);
+    }
+    const explicitlyNamed = { ...jean, key: ['琴', '蒲公英骑士'] };
+    assert.equal(buildRosterUpdate(makeBook([]), makeBook([explicitlyNamed]), [['琴']], 'content').result.added, 1);
+    assert.equal(buildRosterUpdate(existing, makeBook([explicitlyNamed]), [['琴·古恩希尔德']], 'content').result.updated, 0);
 });
 
 for (const count of [100, 50, 3, 0]) {
@@ -114,17 +129,17 @@ for (const count of [100, 50, 3, 0]) {
 test('名单识别两侧别名，缺失、重名和争抢目标的条目等待核对', () => {
     const row = (uid, comment, key = []) => ({ uid, comment, key, content: '正文', order: 1 });
     const mother = makeBook([
-        row(10, '甲'), row(11, '乙'), row(12, '乙'),
-        row(13, '丙'), row(14, '丁'), row(15, '戊'), row(16, '己'), row(17, '庚'),
-        row(18, '辛', ['专属关键词']),
+        row(10, '甲', ['甲的特征']), row(11, '乙', ['乙']), row(12, '乙', ['乙']),
+        row(13, '丙', ['丙的特征']), row(14, '丁', ['丁的特征']), row(15, '戊', ['戊的特征']),
+        row(16, '己', ['己', '己的特征']), row(17, '庚', ['庚的特征']), row(18, '辛某', ['专属关键词']),
     ]);
     const target = makeBook([
-        { ...row(0, 'Alpha'), order: 42 },
-        row(1, '丙'), row(2, '丙'),
-        row(3, '丁（戊）'), row(4, '既有条目', ['庚']),
+        { ...row(0, 'Alpha', ['甲的特征']), order: 42 },
+        row(1, '丙', ['丙的特征']), row(2, '丙', ['丙的特征']),
+        row(3, '丁（戊）', ['丁的特征', '戊的特征']), row(4, '既有条目', ['庚', '庚的特征']),
         row(5, '另一标题', ['专属关键词']),
     ]);
-    const { groups } = parseNameList('甲=Alpha\n乙\n丙\n丁\n戊\n己\n庚\n辛\n缺失', { includeGroups: true });
+    const { groups } = parseNameList('甲=Alpha\n乙\n丙\n丁\n戊\n己\n庚\n辛某\n缺失', { includeGroups: true });
     const { reviewRows } = matchRosterEntries(target, mother, groups);
     assert.deepEqual(reviewRows.new, new Set(['11', '12', '13', '14', '15', '17', '18']));
     assert.deepEqual(reviewRows.old, new Set(['1', '2', '3', '4', '5']));
@@ -148,7 +163,7 @@ test('名单识别两侧别名，缺失、重名和争抢目标的条目等待�
 });
 
 test('名单尊重手动配对和解除决定，并保护名单外的手动配对目标', () => {
-    const row = (uid, comment, content) => ({ uid, comment, content });
+    const row = (uid, comment, content) => ({ uid, comment, key: [`${comment}的关键词`], content });
     const mother = makeBook([row(10, '甲', '新'), row(11, '乙', '新'), row(12, '名单外', '新')]);
     const target = makeBook([row(0, '甲', '旧 0'), row(1, '甲', '旧 1'), row(2, '乙', '旧 2')]);
     const manualPairs = [{ oldId: '1', newId: '10' }, { oldId: '2', newId: '12' }];
