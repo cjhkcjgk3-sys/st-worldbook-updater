@@ -1,4 +1,4 @@
-const VERSION = '1.10.0';
+const VERSION = '1.10.1';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -118,7 +118,7 @@ export class UpdaterWindow {
                   <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。"></textarea>
                   <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制母本条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
                   <p class="stwu-scope-report" data-scope-report role="status"></p>
-                  <details class="stwu-scope-spec"><summary>名单格式说明</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>同名或形态匹配不明确时，预览会列出待核对的人名。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol></details>
+                  <details class="stwu-scope-spec"><summary>名单格式说明</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>同名或形态匹配不明确时，预览会列出待核对的人名。</li><li>原神和 Genshin 前缀可直接识别，其他作品可声明“作品别名：作品甲=别称”。</li></ol></details>
                 </div>
               </details>
               <details class="stwu-tool stwu-settings">

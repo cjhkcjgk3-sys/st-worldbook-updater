@@ -393,6 +393,7 @@ export function setBookEntrySettings(book, id, values) {
 // 条目名常见形态：`主角:爱芮`、`角色 - 雷电将军`、`波可娜·费雷尼 (Pulchra Fellini)`，
 // 尾巴偶尔带 `〔2 楼 · 回复 211/247〕` 这类元数据，比较前都要剥掉。
 export const BUILTIN_CATEGORIES = Object.freeze(['角色', '主角', '配角', '地点', '组织', '道具', '玩法', '章节剧情', '角色内心', '剧情大纲', '文风配置']);
+const BUILTIN_WORK_PREFIXES = new Set(['原神', 'genshin', 'genshinimpact']);
 const OPEN_BRACKETS = '(（[［{｛【〔〖「『《〈<＜';
 const CLOSE_BRACKETS = ')）]］}｝】〕〗」』》〉>＞';
 
@@ -457,14 +458,18 @@ export function parseScopedName(value, workKeys = []) {
 export function splitCategoryPrefix(comment, workKeys = []) {
     const text = String(comment ?? '').trim();
     if (!text) return '';
-    const works = new Set(workKeys), categories = new Set(BUILTIN_CATEGORIES);
-    // 冒号前缀只在左侧确实是分类名时剥离（`主角:爱芮` 这类界面标签）。
+    const categories = new Set(BUILTIN_CATEGORIES);
+    const knownPrefix = left => {
+        const key = compactName(left);
+        return categories.has(left) || BUILTIN_WORK_PREFIXES.has(key) || workKeys.includes(key);
+    };
+    // 冒号前缀只在左侧是已知分类或作品名时剥离。
     // 条目本身导出的是纯名字，所以不猜：`Re:Zero` 这类名字保持完整。
     for (const separator of [':', '：']) {
         const at = text.indexOf(separator);
         if (at <= 0) continue;
         const left = text.slice(0, at).trim(), right = text.slice(at + 1).trim();
-        if (right && categories.has(left)) return right;
+        if (right && knownPrefix(left)) return right;
     }
     const spaced = text.indexOf(' - ');
     if (spaced > 0) {
@@ -476,7 +481,7 @@ export function splitCategoryPrefix(comment, workKeys = []) {
         if (at <= 0) continue;
         const left = text.slice(0, at).trim(), right = text.slice(at + separator.length).trim();
         if (!right) continue;
-        if (categories.has(left) || works.has(compactName(left))) return right;
+        if (knownPrefix(left)) return right;
     }
     return '';
 }
@@ -507,7 +512,26 @@ function labelVariants(text) {
     return variants;
 }
 
-/** 条目可用于比较的键：完整名、去前缀的主名、括号里的别名和主要关键词。 */
+function nameWithoutPrefixes(name, workKeys) {
+    let base = name, suffix;
+    while ((suffix = splitCategoryPrefix(base, workKeys))) base = suffix;
+    return base;
+}
+
+function exactNameKeys(name, workKeys) {
+    const base = nameWithoutPrefixes(name, workKeys);
+    return [...labelVariants(base), parseScopedName(base, workKeys).key, compactName(name)].filter(Boolean);
+}
+
+// 带间隔号的中文全名可以用首段查找。完整姓名之间仍按各自全名比较。
+function shortNameKey(name, workKeys) {
+    const base = nameWithoutPrefixes(name, workKeys);
+    const { outside } = splitBrackets(base);
+    const match = outside.trim().match(/^([\p{Script=Han}]{2,3})\s*[·・‧]\s*\p{Script=Han}{2,}(?:\s*[·・‧]\s*\p{Script=Han}{2,})*$/u);
+    return match?.[1] || '';
+}
+
+/** 条目可用于精确比较的键：完整名、去前缀的主名、括号里的别名和主要关键词。 */
 export function entryNameCandidates(entry, workKeys = []) {
     const candidates = new Set();
     const sources = [];
@@ -516,13 +540,8 @@ export function entryNameCandidates(entry, workKeys = []) {
         if (typeof key === 'string' && key.trim()) sources.push(key);
     }
     for (const source of sources) {
-        candidates.add(compactName(source));
-        const base = splitCategoryPrefix(source, workKeys) || source;
-        for (const variant of labelVariants(base)) candidates.add(variant);
-        const parsed = parseScopedName(base, workKeys);
-        if (parsed.key) candidates.add(parsed.key);
+        for (const key of exactNameKeys(source, workKeys)) candidates.add(key);
     }
-    candidates.delete('');
     return candidates;
 }
 
@@ -531,13 +550,12 @@ export function scopeMatch(entry, names, workKeys = []) {
     if (!names?.length || !entry) return '';
     const candidates = entryNameCandidates(entry, workKeys);
     if (!candidates.size) return '';
+    const shortTitle = shortNameKey(entry.comment, workKeys);
     for (const raw of names) {
-        const base = splitCategoryPrefix(raw, workKeys) || raw;
-        for (const variant of labelVariants(base)) if (candidates.has(variant)) return '名称一致';
-        const parsed = parseScopedName(raw, workKeys);
-        if (parsed.key && candidates.has(parsed.key)) return '去作品名后一致';
-        const full = compactName(raw);
-        if (full && candidates.has(full)) return '名称一致';
+        const keys = exactNameKeys(raw, workKeys);
+        if (keys.some(key => candidates.has(key))) return '名称一致';
+        const shortQuery = shortNameKey(raw, workKeys);
+        if ((shortTitle && keys.includes(shortTitle)) || (shortQuery && shortQuery !== shortTitle && candidates.has(shortQuery))) return '简称匹配';
     }
     return '';
 }
@@ -573,25 +591,32 @@ export function parseNameList(text, { includeGroups = false } = {}) {
     return includeGroups ? { ...result, groups } : result;
 }
 
-function rosterNameKeys(name, workKeys) {
-    const base = splitCategoryPrefix(name, workKeys) || name;
-    return [...labelVariants(base), parseScopedName(name, workKeys).key, compactName(name)].filter(Boolean);
-}
-
 function rosterIndex(book, workKeys, includeKeywords = true) {
-    const index = new Map();
+    const exact = new Map(), short = new Map();
+    const add = (index, key, id) => {
+        if (!index.has(key)) index.set(key, []);
+        index.get(key).push(id);
+    };
     for (const [id, entry] of Object.entries(book.entries)) {
         const names = includeKeywords ? entry : { comment: entry.comment };
-        for (const key of entryNameCandidates(names, workKeys)) {
-            if (!index.has(key)) index.set(key, []);
-            index.get(key).push(id);
-        }
+        for (const key of entryNameCandidates(names, workKeys)) add(exact, key, id);
+        const shortTitle = shortNameKey(entry.comment, workKeys);
+        if (shortTitle) add(short, shortTitle, id);
     }
-    return index;
+    return { exact, short };
 }
 
-function rosterHits(index, keys) {
-    return new Set([...new Set(keys)].flatMap(key => index.get(key) || []));
+function rosterHits(index, keys, shortKeys = []) {
+    const hits = new Set();
+    for (const key of new Set(keys)) {
+        for (const id of index.exact.get(key) || []) hits.add(id);
+        for (const id of index.short.get(key) || []) hits.add(id);
+    }
+    for (const key of new Set(shortKeys)) {
+        const fullNames = new Set(index.short.get(key));
+        for (const id of index.exact.get(key) || []) if (!fullNames.has(id)) hits.add(id);
+    }
+    return hits;
 }
 
 export function buildRosterUpdate(oldBook, newBook, groups, mode, {
@@ -611,23 +636,30 @@ export function buildRosterUpdate(oldBook, newBook, groups, mode, {
     const entries = new Map(), review = [], missing = [];
     for (const aliases of groups) {
         const name = aliases.join(' / ');
-        const keys = aliases.flatMap(alias => rosterNameKeys(alias, workKeys));
-        const sources = rosterHits(sourceIndex, keys);
+        const keys = aliases.flatMap(alias => exactNameKeys(alias, workKeys));
+        const shortKeys = aliases.map(alias => shortNameKey(alias, workKeys)).filter(Boolean);
+        const sources = rosterHits(sourceIndex, keys, shortKeys);
         if (!sources.size) { missing.push(name); continue; }
         if (sources.size > 1) { review.push(`${name}（母本有多个匹配条目）`); continue; }
         const newId = sources.values().next().value;
-        if (!entries.has(newId)) entries.set(newId, { name, keys: new Set() });
+        if (!entries.has(newId)) entries.set(newId, { name, keys: new Set(), shortKeys: new Set() });
         for (const key of keys) entries.get(newId).keys.add(key);
+        for (const key of shortKeys) entries.get(newId).shortKeys.add(key);
     }
 
     const matched = [], additions = [], claims = new Map();
     for (const [newId, item] of entries) {
         const source = newBook.entries[newId];
-        const keys = [...item.keys, ...entryNameCandidates({ comment: source.comment }, workKeys)];
-        const namedTargets = rosterHits(targetTitles, keys);
+        const sourceShort = shortNameKey(source.comment, workKeys);
+        // Once a full name is resolved, its short form can find a bare title but never another full name.
+        const shortKeys = new Set(item.shortKeys);
+        if (sourceShort) shortKeys.add(sourceShort);
+        const keys = [...item.keys, ...entryNameCandidates({ comment: source.comment }, workKeys)].filter(key => !shortKeys.has(key));
+        const namedTargets = rosterHits(targetTitles, keys, shortKeys);
         // A source keyword matching a target title is evidence of a possible alias.
-        for (const oldId of rosterHits(targetTitles, entryNameCandidates({ key: source.key }, workKeys))) namedTargets.add(oldId);
-        const targets = rosterHits(targetIndex, keys);
+        const keywordKeys = [...entryNameCandidates({ key: source.key }, workKeys)].filter(key => !shortKeys.has(key));
+        for (const oldId of rosterHits(targetTitles, keywordKeys)) namedTargets.add(oldId);
+        const targets = rosterHits(targetIndex, keys, shortKeys);
         for (const oldId of namedTargets) targets.add(oldId);
         if (overrides.has(newId)) {
             targets.clear();
