@@ -1,4 +1,4 @@
-const VERSION = '1.10.2';
+const VERSION = '1.10.3';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';

@@ -7,6 +7,32 @@ import {
 
 const makeBook = rows => ({ entries: Object.fromEntries(rows.map(row => [String(row.uid), row])), label: 'keep' });
 
+test('匹配哥伦比娅的四字简称与译名异写，并识别菲谢尔合写条目的主名', () => {
+    const mother = makeBook([
+        { uid: 10, comment: '哥伦比娅·希珀塞莱妮娅', key: ['少女', '库塔尔', '月之少女', '空月归乡', '小鸽子'], content: '少女新正文' },
+        { uid: 11, comment: '菲谢尔·冯·露弗施洛斯·那菲多特', key: ['菲谢尔·冯·露弗施洛斯·那菲多特', '断罪之皇女'], content: '菲谢尔新正文' },
+    ]);
+    const target = makeBook([
+        { uid: 0, comment: '哥伦比亚', key: ['少女', '库塔尔', '月神', '哥伦比娅'], content: '少女旧正文' },
+        { uid: 1, comment: '菲谢尔，奥兹', key: ['菲谢尔、奥兹'], content: '合写旧正文' },
+    ]);
+    for (const name of ['哥伦比娅', '哥伦比亚', '哥伦比亚·希珀塞莱妮娅']) {
+        const groups = [[name], ['菲谢尔']];
+        const plan = buildRosterUpdate(target, mother, groups, 'content');
+        assert.deepEqual(plan.replace, [name, '菲谢尔 → 「菲谢尔，奥兹」（更新整条）']);
+        assert.deepEqual(plan.copy, []);
+        assert.equal(plan.result.data.entries[0].content, '少女新正文');
+        assert.equal(plan.result.data.entries[1].content, '菲谢尔新正文');
+        assert.equal(plan.result.data.entries[1].comment, '菲谢尔，奥兹');
+        const again = buildRosterUpdate(plan.result.data, mother, groups, 'content');
+        assert.equal(again.result.updated + again.result.added, 0);
+    }
+    const companionMother = makeBook([{ uid: 12, comment: '奥兹', key: ['菲谢尔'], content: '奥兹新正文' }]);
+    const companion = buildRosterUpdate(target, companionMother, [['奥兹']], 'content');
+    assert.equal(companion.review.length, 1);
+    assert.equal(companion.result.updated + companion.result.added, 0);
+});
+
 test('丽莎的简称、全名、作品前缀可在母本、目标书和名单互换', () => {
     const names = ['丽莎', '丽莎·敏兹', '原神·丽莎'];
     for (const motherName of names) for (const targetName of names) for (const name of names) {

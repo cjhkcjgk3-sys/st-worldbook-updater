@@ -412,6 +412,37 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        const mother = state.books.get('演示_母本'), target = state.books.get('演示_目标书');
+        mother.entries[90] = entry(90, '哥伦比娅·希珀塞莱妮娅', ['少女', '库塔尔', '小鸽子'], '母本少女');
+        mother.entries[91] = entry(91, '菲谢尔·冯·露弗施洛斯·那菲多特', ['断罪之皇女'], '母本菲谢尔');
+        target.entries[0] = entry(0, '哥伦比亚', ['少女', '库塔尔'], '旧少女');
+        target.entries[1] = entry(1, '菲谢尔，奥兹', ['菲谢尔、奥兹'], '旧菲谢尔');
+        const { page, ctx, errors } = await prepare(390, 844, null, true);
+        await openTool(page, 'stwu-scope');
+        await page.locator('[data-scope]').fill('哥伦比亚\n菲谢尔');
+        await page.locator('[data-scope]').press('Tab');
+        for (const [oldId, newId] of [[0, 90], [1, 91]]) {
+            const status = (side, id) => page.locator(`[data-list="${side}"] [data-id="${id}"] .stwu-entry-status`).textContent();
+            assert.match(await status('old', oldId), /配对 \d+ · 有变化/);
+            assert.equal(await status('old', oldId), await status('new', newId));
+        }
+        await page.getByRole('button', { name: '按名单更新', exact: true }).click();
+        assert.match(await page.locator('[data-roster-summary]').textContent(), /替换 2 · 复制 0/);
+        assert.match(await page.locator('[data-roster-report]').textContent(), /菲谢尔，奥兹.*更新整条/);
+        await page.getByRole('button', { name: '确认更新', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换 2 条，复制 0 条'));
+        assert.equal(state.writes, 1);
+        const updated = state.books.get('演示_目标书');
+        assert.equal(updated.entries[0].content, '母本少女');
+        assert.equal(updated.entries[1].content, '母本菲谢尔');
+        assert.equal(updated.entries[1].comment, '菲谢尔，奥兹');
+        assert.equal(Object.keys(updated.entries).length, Object.keys(target.entries).length);
+        assert.deepEqual(errors, []);
+        results.push('哥伦比娅译名异写、菲谢尔奥兹合写标题可配对和替换');
+        await ctx.close();
+    }
+
     // Copy selected + file upload + error protections
     reset(); {
         const { page, ctx } = await prepare();
