@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, buildUpdate, canonical, classifyIncoming, clone } from '../core.js';
+import { autoMatch, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, scopeMatch } from '../core.js';
 
 const e = (uid, comment, key, content = '正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(entry => [String(entry.uid), entry])) });
@@ -42,6 +42,22 @@ test('共享或部分重叠关键词、重名和无身份信息均留待处理',
     const states = classifyIncoming(old, source, []);
     assert.equal(states.get('8'), 'review'); assert.equal(states.get('9'), 'review');
     assert.equal(states.get('10'), 'review'); assert.equal(states.get('11'), 'new');
+});
+
+test('不同标题只重合一个字时，不自动配对，也不进入待核对', () => {
+    for (const [sourceTitle, targetTitle] of [['爱情', '爱好'], ['爱情（爱）', '爱好（爱）'], ['爱·长情', '爱好（爱）']]) {
+        const source = book(e(8, sourceTitle, ['爱'], '一样的正文'));
+        const target = book(e(0, targetTitle, ['爱'], '一样的正文'));
+        const reviewTargets = new Set();
+        assert.deepEqual(autoMatch(target, source), []);
+        assert.equal(classifyIncoming(target, source, [], reviewTargets).get('8'), 'new');
+        assert.equal(reviewTargets.size, 0);
+        assert.equal(scopeMatch(target.entries[0], [sourceTitle]), '');
+        const plan = buildRosterUpdate(target, source, [[sourceTitle]], 'content');
+        assert.deepEqual(plan.review, []);
+        assert.equal(plan.result.updated, 0);
+        assert.equal(plan.result.added, 1);
+    }
 });
 
 test('待处理条目须明确标记新增，不能被普通全选偷偷追加', () => {

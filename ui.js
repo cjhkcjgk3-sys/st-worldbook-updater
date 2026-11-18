@@ -1,4 +1,4 @@
-const VERSION = '1.10.6';
+const VERSION = '1.10.7';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -145,7 +145,13 @@ export class UpdaterWindow {
                 </div>
               </details>
             </div>
-            <div class="stwu-selection-bar"><button type="button" class="menu_button" data-action="toggle-selection" aria-pressed="false">全选当前结果</button><span class="stwu-selection stwu-selection-compact" data-selection-summary="compact" aria-live="polite"></span></div>
+            <div class="stwu-selection-bar">
+              <select class="text_pole" data-selection-category aria-label="母本批量勾选类别">
+                <option value="paired">已配对</option><option value="review">待核对</option><option value="new">可新增</option>
+              </select>
+              <button type="button" class="menu_button" data-action="toggle-selection" aria-pressed="false">批量勾选</button>
+              <span class="stwu-selection stwu-selection-compact" data-selection-summary="compact" aria-live="polite"></span>
+            </div>
             <div class="stwu-workspace" data-preview-open="false" data-split="balanced">
               <section class="stwu-entry-window" aria-label="条目对照窗口">
               <div class="stwu-panels">
@@ -315,6 +321,7 @@ export class UpdaterWindow {
             this.render();
         });
         this.on(this.find('[data-scope]'), 'change', () => this.applyScope());
+        this.on(this.find('[data-selection-category]'), 'change', () => this.renderBulkSelection());
         this.on(this.find('[data-scope-pin]'), 'change', event => { this.pinMatches = event.target.checked; this.render(); });
         this.on(this.find('[data-file]'), 'change', event => {
             const file = event.target.files?.[0];
@@ -762,18 +769,28 @@ export class UpdaterWindow {
         }
     }
 
+    bulkSelectionRows(category) {
+        const { states, reviewRows } = this.incoming();
+        return this.filteredRows.new.filter(({ id }) => {
+            if (reviewRows.new.has(id)) return category === 'review';
+            if (this.pairForSource(id)) return category === 'paired';
+            return category === 'new' && states.get(id) === 'new' && this.inScope(id);
+        });
+    }
+
     toggleFilteredSelection() {
-        const rows = this.filteredRows.new;
+        const category = this.find('[data-selection-category]');
+        const rows = this.bulkSelectionRows(category.value);
         if (!rows.length) return;
         const select = !rows.every(({ id }) => this.isEntryChecked(id));
-        const pairs = new Map(this.pairs.map(pair => [pair.newId, pair]));
         for (const { id } of rows) {
             this.newSelection.set(id, select);
-            const pair = pairs.get(id);
+            const pair = this.pairForSource(id);
             if (pair) { pair.checked = select; this.pairChecks.set(id, select); }
         }
         this.selectionCountsValid = false;
-        this.message(select ? `已勾选母本当前搜索结果，共 ${rows.length} 条。` : `已取消母本当前搜索结果的勾选，共 ${rows.length} 条。`);
+        const label = category.selectedOptions[0].textContent;
+        this.message(`母本当前搜索结果：${select ? '已勾选' : '已取消勾选'} ${rows.length} 条「${label}」。`);
         this.render();
     }
 
@@ -973,11 +990,6 @@ export class UpdaterWindow {
             this.find(`[data-page-step="${side}:-1"]`).disabled = this.busy || this.page[side] <= 1;
             this.find(`[data-page-step="${side}:1"]`).disabled = this.busy || this.page[side] >= pages;
         }
-        const toggle = this.find('[data-action="toggle-selection"]');
-        const allSelected = this.filteredRows.new.length > 0 && this.filteredRows.new.every(({ id }) => this.isEntryChecked(id));
-        toggle.textContent = allSelected ? '取消全选当前结果' : '全选当前结果';
-        toggle.setAttribute('aria-pressed', String(allSelected));
-        toggle.disabled = this.busy || !this.newBook || !this.filteredRows.new.length;
         this.renderSelectionSummary();
         this.renderPairControls();
         for (const side of ['old', 'new']) {
@@ -992,7 +1004,18 @@ export class UpdaterWindow {
         }
     }
 
+    renderBulkSelection() {
+        const category = this.find('[data-selection-category]');
+        const toggle = this.find('[data-action="toggle-selection"]');
+        const rows = this.bulkSelectionRows(category.value);
+        const allSelected = rows.length > 0 && rows.every(({ id }) => this.isEntryChecked(id));
+        toggle.textContent = rows.length ? `${allSelected ? '取消勾选' : '勾选'} ${rows.length} 条` : '批量勾选';
+        toggle.setAttribute('aria-pressed', String(allSelected));
+        toggle.disabled = this.busy || !rows.length;
+    }
+
     renderSelectionSummary() {
+        this.renderBulkSelection();
         if (!this.selectionCountsValid) this.refreshSelectionCounts();
         const hasRoster = this.scopeNames.length > 0;
         const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedCopyCount} 条 · 当前结果可复制 ${this.visibleCopyCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;

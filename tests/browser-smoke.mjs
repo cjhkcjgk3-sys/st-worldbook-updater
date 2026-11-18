@@ -249,10 +249,10 @@ try {
     reset(); {
         const common = Array.from({ length: 30 }, (_, i) => entry(i, `角色 ${i}`, [], '旧正文'));
         const target = book([...common, entry(80, '尼可', ['尼可·莱恩', '魔女N', '尼可'], '旧正文'),
-            entry(81, '露娜', [], '待核对甲'), entry(82, '露娜', [], '待核对乙')]);
+            entry(81, '露娜', [], '待核对甲'), entry(82, '露娜', [], '待核对乙'), entry(83, '爱好', ['爱'], '目标独有')]);
         const mother = book([...common.map(row => ({ ...row, uid: row.uid + 100, content: '新正文' })),
             entry(180, '尼可·莱恩', ['尼可·莱恩', '魔女「N」', '喧寂于心'], '新正文'),
-            entry(181, '露娜·费尔', [], '待核对正文'), entry(182, '母本独有', [], '新条目')]);
+            entry(181, '露娜·费尔', [], '待核对正文'), entry(182, '爱情', ['爱'], '新条目')]);
         state.books.set('演示_目标书', target);
         state.books.set('演示_母本', mother);
         const { page, ctx, errors } = await prepare(320, 568);
@@ -270,6 +270,41 @@ try {
         assert.equal(await status('old', 80).textContent(), await status('new', 180).textContent());
         assert.equal(await status('old', 81).textContent(), '置顶 · 待核对');
         assert.equal(await status('old', 82).textContent(), '置顶 · 待核对');
+        assert.equal(await status('new', 182).textContent(), '未配对 · 可复制');
+        assert.equal(await status('old', 83).textContent(), '目标书独有 · 保留');
+        const category = page.locator('[data-selection-category]');
+        const bulk = page.locator('[data-action="toggle-selection"]');
+        const sourceCheck = id => page.locator(`[data-list="new"] [data-id="${id}"] input`);
+        await category.selectOption('review');
+        assert.equal(await bulk.textContent(), '勾选 1 条');
+        await bulk.click();
+        assert.equal(await sourceCheck(181).isChecked(), true);
+        assert.equal(await sourceCheck(182).isChecked(), false);
+        await page.locator('[data-search="new"]').fill('尼可');
+        assert.equal(await bulk.isDisabled(), true);
+        await page.locator('[data-search="new"]').fill('');
+        await category.selectOption('new');
+        assert.equal(await bulk.textContent(), '勾选 1 条');
+        await bulk.click();
+        await category.selectOption('paired');
+        assert.equal(await bulk.textContent(), '取消勾选 31 条');
+        await bulk.click();
+        assert.equal(await sourceCheck(181).isChecked(), true);
+        await page.locator('[data-page-step="new:1"]').click();
+        assert.equal(await sourceCheck(180).isChecked(), false);
+        assert.equal(await sourceCheck(182).isChecked(), true);
+        assert.equal(await page.locator('[data-list="old"] [data-id="80"] input').isChecked(), false);
+        await category.selectOption('review');
+        await bulk.click();
+        assert.equal(await sourceCheck(182).isChecked(), true);
+        await page.locator('[data-page-step="new:-1"]').click();
+        assert.equal(await sourceCheck(181).isChecked(), false);
+        const bulkLines = await bulk.evaluate(button => {
+            const text = document.createRange();
+            text.selectNodeContents(button);
+            return text.getClientRects().length;
+        });
+        assert.equal(bulkLines, 1);
         await page.locator('[data-search="old"]').fill('尼可');
         assert.equal(await targetJump.isVisible(), false);
         await page.locator('[data-search="old"]').fill('');
@@ -284,7 +319,7 @@ try {
         assert.match(await page.locator('[data-roster-summary]').textContent(), /替换 1 · 复制 0 · 无变化 0 · 待核对 1/);
         assert.equal(state.writes, 0);
         assert.deepEqual(errors, []);
-        results.push('尼可整本配对、待核对双栏置顶、跨页跳转、搜索及名单预览一致性通过');
+        results.push('单字重合不进待核对，分类批量勾选、跨页跳转与名单预览通过');
         await ctx.close();
     }
 
