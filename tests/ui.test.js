@@ -54,6 +54,7 @@ function setup() {
     const nodes = {
         '[data-scope]': { value: '' },
         '[data-mode]': { value: 'content' },
+        '[data-selection-category]': { value: 'paired', selectedOptions: [{ textContent: '已配对' }] },
         '[data-search="new"]': { value: '' },
         '[data-search="old"]': { value: '' },
         '[data-list="old"]': { scrollTop: 0 },
