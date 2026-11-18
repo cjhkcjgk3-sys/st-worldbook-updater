@@ -1,7 +1,7 @@
-const VERSION = '1.13.3';
+const VERSION = '1.13.4';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
 const entryIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
@@ -112,6 +112,7 @@ export class UpdaterWindow {
                     <button type="button" class="menu_button" data-pair-btn="auto-reset">重置配对</button>
                     <button type="button" class="menu_button" data-pair-btn="unpair-all">全部解除</button>
                     <button type="button" class="menu_button" data-pair-btn="consolidate">合并或删除目标条目</button>
+                    <button type="button" class="menu_button" data-pair-btn="batch-consolidate">批量合并重复</button>
                     <button type="button" class="menu_button" data-action="swap-sides">交换左右</button>
                   </div>
                   <span class="stwu-pairhint">点击两侧条目后，可在此配对或解除</span>
@@ -288,11 +289,12 @@ export class UpdaterWindow {
             if (action === 'preview-roster') this.run(() => this.previewRoster());
             if (action === 'close-roster') {
                 this.rosterPreview = null;
+                this.batchConsolidationPreview = null;
                 this.find('[data-roster-dialog]').close();
             }
             if (action === 'save-roster') {
                 this.find('[data-roster-dialog]').close();
-                this.run(() => this.saveRoster());
+                this.run(() => this.batchConsolidationPreview ? this.saveBatchConsolidation() : this.saveRoster());
             }
             if (action === 'close-consolidation') {
                 this.targetOperation = null;
@@ -489,6 +491,7 @@ export class UpdaterWindow {
         else if (action === 'unpair') this.unpair();
         else if (action === 'unpair-all') this.unpairAll();
         else if (action === 'consolidate') this.run(() => this.openTargetOperation());
+        else if (action === 'batch-consolidate') this.run(() => this.previewBatchConsolidation());
         else if (action === 'auto') { this.repair(); this.message(`已重新自动匹配，共 ${this.pairs.length} 组；保留人工配对、解除和勾选。`); this.render(); }
         else if (action === 'auto-reset' && globalThis.confirm('将清除人工配对、解除记录及当前勾选，重新自动匹配。确认？')) {
             this.resetPairDecisions(); this.repair(); this.message(`已重置配对决定，自动匹配 ${this.pairs.length} 组。`); this.render();
@@ -1276,8 +1279,9 @@ export class UpdaterWindow {
         setDisabled('auto-reset', !ready);
         const hasTargetSelection = !!(this.oldBook && (this.oldBook.entries[this.selectedOld] || this.targetChecks.size));
         const hasMotherMatch = !!(ready && !this.sameNamedBook() && this.newBook?.entries[this.selectedNew]);
-        const canTargetOp = !this.busy && !!this.oldBook && !this.service.requiresReload && (hasMotherMatch || hasTargetSelection);
+        const canTargetOp = !this.busy && !!this.oldBook && !this.service.requiresReload && (hasMotherMatch || hasTargetSelection || (ready && !this.sameNamedBook()));
         setDisabled('consolidate', !canTargetOp);
+        setDisabled('batch-consolidate', !ready || this.service.requiresReload || this.sameNamedBook());
         const targetOpBtn = this.find('[data-action="target-operation"]');
         if (targetOpBtn) targetOpBtn.disabled = !canTargetOp;
         const hint = this.find('.stwu-pairbar .stwu-pairhint');
@@ -1394,6 +1398,10 @@ export class UpdaterWindow {
         const isMatched = matches.size > 0;
         const candidateIds = isMatched ? matches : new Set(directIds);
         if (!candidateIds.size) {
+            if (this.newBook && !this.sameNamedBook()) {
+                this.previewBatchConsolidation();
+                return;
+            }
             this.message('目标书没有可核对的匹配条目；如需直接删除，请先在目标书勾选或点选条目。');
             return;
         }
@@ -1521,7 +1529,12 @@ export class UpdaterWindow {
         const roster = this.resolvedRoster();
         if (!roster) return;
         const plan = buildResolvedRosterUpdate(this.oldBook, this.newBook, roster, this.mode, this.scopeWorkKeys);
+        this.batchConsolidationPreview = null;
         this.rosterPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName };
+        const heading = this.find('#stwu-roster-heading');
+        if (heading) heading.textContent = '按名单更新';
+        const saveBtn = this.find('[data-action="save-roster"]');
+        saveBtn.textContent = '确认更新';
         const sections = [
             ['替换', plan.replace], ['复制', plan.copy], ['无变化', plan.unchanged],
             ['待核对', plan.review], ['母本未找到', plan.missing],
@@ -1531,10 +1544,73 @@ export class UpdaterWindow {
             + sections.map(([label, names]) => `${label} ${names.length}`).join(' · ');
         this.find('[data-roster-report]').textContent = sections.filter(([, names]) => names.length)
             .map(([label, names]) => `${label}\n${names.join('\n')}`).join('\n\n');
-        this.find('[data-action="save-roster"]').hidden = !(plan.result.updated || plan.result.added);
+        saveBtn.hidden = !(plan.result.updated || plan.result.added);
         const dialog = this.find('[data-roster-dialog]');
         dialog.showModal();
         this.find('[data-roster-report]').scrollTop = 0;
+    }
+
+    previewBatchConsolidation() {
+        if (!this.oldBook || !this.newBook || this.sameNamedBook()) return;
+        const plan = planBatchConsolidation(this.oldBook, this.newBook, {
+            workKeys: this.scopeWorkKeys,
+            scopeNames: this.scopeNames,
+            pairs: this.pairs,
+        });
+        if (!plan.groups.length && !plan.conflicts.length) {
+            this.message('目标书中没有需要合并的 1 对多重复角色（目标书独有设定已自动忽略）。');
+            return;
+        }
+        const removedTotal = plan.groups.reduce((sum, g) => sum + g.duplicateOldIds.length, 0);
+        this.rosterPreview = null;
+        this.batchConsolidationPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName, mode: this.mode };
+        const heading = this.find('#stwu-roster-heading');
+        if (heading) heading.textContent = '批量合并重复（1:N）';
+        const saveBtn = this.find('[data-action="save-roster"]');
+        saveBtn.textContent = '确认合并';
+        saveBtn.hidden = !plan.groups.length;
+        const modeLabel = this.mode === 'content' ? '仅正文' : '完整条目';
+        const scopeLabel = this.scopeNames.length ? ` · 仅限名单（${this.scopeNames.length} 个）` : '';
+        this.find('[data-roster-summary]').textContent = `母本「${this.newName}」 → 目标书「${this.oldName}」 · 替换范围：${modeLabel}${scopeLabel}。\n`
+            + `将合并 ${plan.groups.length} 个重复角色（移除 ${removedTotal} 条多余副本），目标书独有设定保持不变。`
+            + (plan.conflicts.length ? `另有 ${plan.conflicts.length} 个存在多对多歧义已跳过。` : '');
+        const lines = [];
+        if (plan.groups.length) {
+            lines.push('将合并替换\n' + plan.groups.map(g => `${g.name}：保留并更新 UID ${g.oldId}，移除副本 UID ${g.duplicateOldIds.join('、')}`).join('\n'));
+        }
+        if (plan.conflicts.length) {
+            lines.push('跳过（需人工核对）\n' + plan.conflicts.join('\n'));
+        }
+        this.find('[data-roster-report]').textContent = lines.join('\n\n');
+        this.find('[data-roster-dialog]').showModal();
+        this.find('[data-roster-report]').scrollTop = 0;
+    }
+
+    async saveBatchConsolidation() {
+        const preview = this.batchConsolidationPreview;
+        this.batchConsolidationPreview = null;
+        if (!preview) return;
+        const { plan, before, mother, target, mode } = preview;
+        if (target !== this.oldName || before !== this.oldBook || mother !== this.newBook || this.sameNamedBook()) {
+            throw new Error('世界书在预览后已变化，请重新预览。');
+        }
+        if (!plan.groups.length) return;
+        const result = buildBatchConsolidation(before, mother, plan.groups, mode, this.scopeWorkKeys);
+        this.message('正在批量合并重复条目并核验目标书…');
+        const saved = await this.saveTargetFromMother(result.data, preview);
+        this.oldBook = saved.data;
+        const removed = new Set(result.removedOldIds);
+        const mergedNewIds = new Set(plan.groups.map(g => g.newId));
+        this.pairs = this.pairs.filter(pair => !removed.has(pair.oldId) && !mergedNewIds.has(pair.newId));
+        for (const id of removed) this.unpairedOld.delete(id);
+        for (const g of plan.groups) {
+            this.unpairedOld.delete(g.oldId);
+            this.unpairedNew.delete(g.newId);
+            this.newSelection.set(g.newId, false);
+            this.pairChecks.set(g.newId, false);
+        }
+        this.repair(false, false);
+        this.message(`已核验并批量合并 ${result.mergedGroups} 个重复角色（更新 ${result.updated} 条，移除 ${result.removed} 条副本），目标书独有设定已保留。${saved.note || ''}`);
     }
 
     async saveRoster() {

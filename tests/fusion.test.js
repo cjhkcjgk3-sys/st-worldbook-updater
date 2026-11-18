@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, scopeMatch, workKeysOf } from '../core.js';
+import { autoMatch, buildBatchConsolidation, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, planBatchConsolidation, scopeMatch, workKeysOf } from '../core.js';
 
 const e = (uid, comment, key, content = '正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(entry => [String(entry.uid), entry])) });
@@ -385,4 +385,39 @@ test('直接删除目标条目不依赖母本匹配，同步清理导出镜像�
         [[0, '0'], /不可重复/],
         [['404'], /已不存在/],
     ]) assert.throws(() => buildDirectDeletion(old, oldIds), error);
+});
+
+test('批量合并重复支持母本对目标 1:2 与 1:3 一次合并替换，保留目标独有设定并跳过多对多冲突', () => {
+    const mother = book(
+        e(10, '角色甲', ['角色甲'], '新甲'),
+        e(11, '角色乙', ['角色乙'], '新乙'),
+        e(12, '冲突角色', ['冲突词'], '母本一'),
+        e(13, '冲突角色', ['冲突词'], '母本二'),
+    );
+    const target = book(
+        e(1, '角色甲', ['角色甲'], '旧甲1'),
+        e(2, '角色甲', ['角色甲'], '旧甲2'),
+        e(3, '角色乙', ['角色乙'], '旧乙1'),
+        e(4, '角色乙', ['角色乙'], '旧乙2'),
+        e(5, '角色乙', ['角色乙'], '旧乙3'),
+        e(6, '世界观设定', ['世界观'], '必须保留的设定'),
+        e(7, '冲突角色', ['冲突词'], '目标一'),
+        e(8, '冲突角色', ['冲突词'], '目标二'),
+    );
+    const plan = planBatchConsolidation(target, mother);
+    assert.equal(plan.groups.length, 2);
+    assert.equal(plan.conflicts.length, 2);
+    const res = buildBatchConsolidation(target, mother, plan.groups, 'content');
+    assert.equal(res.mergedGroups, 2);
+    assert.equal(res.updated, 2);
+    assert.equal(res.removed, 3);
+    assert.equal(res.data.entries['1'].content, '新甲');
+    assert.equal(res.data.entries['2'], undefined);
+    assert.equal(res.data.entries['3'].content, '新乙');
+    assert.equal(res.data.entries['4'], undefined);
+    assert.equal(res.data.entries['5'], undefined);
+    assert.equal(res.data.entries['6'].content, '必须保留的设定');
+    assert.ok(res.data.entries['7']);
+    assert.ok(res.data.entries['8']);
+    assert.deepEqual(autoMatch(res.data, mother).filter(p => ['10', '11'].includes(p.newId)).map(p => [p.oldId, p.newId]), [['1', '10'], ['3', '11']]);
 });

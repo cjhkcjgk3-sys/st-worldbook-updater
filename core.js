@@ -488,6 +488,61 @@ export function buildConsolidation(oldBook, newBook, group, mode = 'content', wo
     return { ...removeMatchedTargets(data, removedOldIds), updated, skipped, oldId, newId };
 }
 
+export function planBatchConsolidation(oldBook, newBook, {
+    workKeys = [], scopeNames = [], pairs = [],
+} = {}) {
+    validateBook(oldBook); validateBook(newBook);
+    const pairBySource = new Map((pairs || []).map(pair => [String(pair.newId), String(pair.oldId)]));
+    const rawGroups = [];
+    const targetClaims = new Map();
+    for (const { id: newId, entry } of listEntries(newBook)) {
+        if (scopeNames?.length && !scopeMatch(entry, scopeNames, workKeys)) continue;
+        const candidates = consolidationCandidates(oldBook, newBook, newId, workKeys);
+        if (candidates.length < 2) continue;
+        rawGroups.push({ newId, name: title(entry), candidates });
+        for (const oldId of candidates) {
+            if (!targetClaims.has(oldId)) targetClaims.set(oldId, []);
+            targetClaims.get(oldId).push(newId);
+        }
+    }
+    const groups = [], conflicts = [];
+    for (const item of rawGroups) {
+        const conflicted = item.candidates.some(oldId => targetClaims.get(oldId).length > 1);
+        if (conflicted) {
+            conflicts.push(`${item.name}（多个母本条目命中同一目标条目，需人工核对）`);
+            continue;
+        }
+        const pairedOld = pairBySource.get(item.newId);
+        const oldId = pairedOld && item.candidates.includes(pairedOld) ? pairedOld : item.candidates[0];
+        const duplicateOldIds = item.candidates.filter(id => id !== oldId);
+        groups.push({ newId: item.newId, name: item.name, oldId, duplicateOldIds });
+    }
+    return { groups, conflicts };
+}
+
+export function buildBatchConsolidation(oldBook, newBook, groups, mode = 'content', workKeys = []) {
+    validateBook(oldBook); validateBook(newBook);
+    if (!Array.isArray(groups) || !groups.length) throw new Error('没有可批量合并的重复条目。');
+    const seenOld = new Set(), seenNew = new Set();
+    const pairs = [], allRemoved = [];
+    for (const group of groups) {
+        const { newId: sourceId, oldId: retainedId, duplicateOldIds } = group ?? {};
+        if (!Array.isArray(duplicateOldIds) || !duplicateOldIds.length) throw new Error('批量合并分组缺少待移除的重复条目。');
+        const { newId, oldIds } = matchedSelection(oldBook, newBook, sourceId, [retainedId, ...duplicateOldIds], workKeys);
+        if (seenNew.has(newId)) throw new Error('母本条目在批量合并中重复出现。');
+        seenNew.add(newId);
+        for (const id of oldIds) {
+            if (seenOld.has(id)) throw new Error('同一目标条目被多个合并分组重复引用，已停止合并。');
+            seenOld.add(id);
+        }
+        const [oldId, ...removedOldIds] = oldIds;
+        pairs.push({ oldId, newId, checked: true });
+        allRemoved.push(...removedOldIds);
+    }
+    const { data, updated, skipped } = buildUpdate(oldBook, newBook, pairs, mode);
+    return { ...removeMatchedTargets(data, allRemoved), updated, skipped, mergedGroups: groups.length };
+}
+
 export function buildMatchedDeletion(oldBook, newBook, group, workKeys = []) {
     const { newId, oldIds } = group ?? {};
     if (!Array.isArray(oldIds) || !oldIds.length) throw new Error('请至少选择一条要移除的目标书条目。');
