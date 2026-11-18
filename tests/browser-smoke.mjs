@@ -1097,14 +1097,21 @@ try {
 
     reset(); {
         const { page, ctx } = await prepare();
-        // 不选中母本条目，直接在目标书侧通过「勾选未配对」或勾选独有条目 uid 4 并通过目标栏「合并/删除」按钮直接删除
-        assert.equal(await page.locator('[data-action="target-operation"]').isDisabled(), true);
+        // 未选中任何条目时点「合并/删除」，自动扫描并打开 1:N 批量合并重复预览（共同标题 1:2），保留目标独有设定，确认后恢复 1:1 配对
+        await page.locator('[data-action="target-operation"]').click();
+        await page.locator('[data-roster-dialog]').waitFor({ state: 'visible' });
+        assert.match(await page.locator('[data-roster-summary]').textContent(), /将合并 1 个重复角色（移除 1 条多余副本）/);
+        await page.locator('[data-action="save-roster"]').click();
+        await page.waitForFunction(() => /^已核验并批量合并 1 个重复角色/.test(document.querySelector('.stwu-notice').textContent));
+        assert.equal(state.books.get('演示_目标书').entries['2'], undefined);
+        assert.equal(state.books.get('演示_目标书').entries['4'].content, '保留内容');
+
+        // 再通过「勾选未配对」或勾选独有条目 uid 4 直接删除
         await page.locator('[data-action="toggle-target-unpaired"]').click();
         assert.equal(await page.locator('[data-list="old"] [data-id="4"] input').isChecked(), true);
         await page.locator('[data-action="toggle-target-unpaired"]').click();
         assert.equal(await page.locator('[data-list="old"] [data-id="4"] input').isChecked(), false);
         await page.locator('[data-list="old"] [data-id="4"] input').check();
-        assert.equal(await page.locator('[data-action="target-operation"]').isDisabled(), false);
         await page.locator('[data-action="target-operation"]').click();
         await page.locator('[data-consolidate-dialog]').waitFor({ state: 'visible' });
         assert.equal(await page.locator('[data-target-operation]').isDisabled(), true);
@@ -1113,7 +1120,7 @@ try {
         await page.locator('[data-action="save-consolidation"]').click();
         await page.waitForFunction(() => /^已核验并删除 1 条目标条目/.test(document.querySelector('.stwu-notice').textContent));
         assert.equal(state.books.get('演示_目标书').entries['4'], undefined);
-        results.push('未选母本时目标书侧直接勾选并删除条目通过');
+        results.push('批量 1:N 合并重复（保留独有设定）及未选母本时目标书侧直接勾选删除通过');
         await ctx.close();
     }
 
