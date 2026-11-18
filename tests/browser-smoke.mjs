@@ -343,10 +343,15 @@ try {
 
     // Roster preview and a single verified write.
     reset(); {
-        const { page, ctx, errors } = await prepare(320, 568);
+        state.books.get('演示_目标书').entries[0].comment = '原神·丽莎';
+        state.books.get('演示_母本').entries[90].comment = '丽莎·敏兹';
+        state.books.get('演示_目标书').entries[0].key = [];
+        state.books.get('演示_母本').entries[90].key = [];
+        const motherBefore = structuredClone(state.books.get('演示_母本'));
+        const { page, ctx, errors } = await prepare(320, 568, null, true);
         await openTool(page, 'stwu-scope');
         const input = page.locator('[data-scope]');
-        await input.fill('角色甲\n新增条目\n无变化\n共同标题\n找不到角色');
+        await input.fill('丽莎\n新增条目\n无变化\n共同标题\n找不到角色');
         await input.press('Tab');
         const previewButton = page.getByRole('button', { name: '按名单更新', exact: true });
         const dialog = page.locator('[data-roster-dialog]');
@@ -356,7 +361,7 @@ try {
         assert.equal(await dialog.isVisible(), true);
         assert.match(await dialog.locator('[data-roster-summary]').textContent(), /替换 1 · 复制 1 · 无变化 1 · 待核对 1 · 母本未找到 1/);
         const details = await dialog.locator('[data-roster-report]').textContent();
-        for (const name of ['角色甲', '新增条目', '无变化', '共同标题', '找不到角色']) assert.ok(details.includes(name));
+        for (const name of ['丽莎', '新增条目', '无变化', '共同标题', '找不到角色']) assert.ok(details.includes(name));
         assert.equal(state.writes, 0);
         await page.keyboard.press('Escape');
         assert.equal(await dialog.isVisible(), false);
@@ -370,13 +375,13 @@ try {
         assert.equal(target.entries[0].order, 100);
         assert.equal(target.entries[1].content, old.entries[1].content);
         assert.equal(Object.values(target.entries).filter(row => row.comment === '新增条目').length, 1);
-        assert.deepEqual(state.books.get('演示_母本'), newer);
+        assert.deepEqual(state.books.get('演示_母本'), motherBefore);
         await previewButton.click();
         assert.match(await dialog.locator('[data-roster-summary]').textContent(), /替换 0 · 复制 0 · 无变化 3/);
         assert.equal(await confirm.isVisible(), false);
         assert.equal(state.writes, 1);
         assert.deepEqual(errors, []);
-        results.push('320px 名单预览、取消、一次写入、搜索独立与重复执行通过');
+        results.push('320px 名单预览、丽莎全名与简称替换、取消、一次写入及重复执行通过');
         await ctx.close();
     }
 

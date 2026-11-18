@@ -72,10 +72,22 @@ test('名称折叠全半角、括号样式、标点与间隔号', () => {
     assert.equal(compactName('ＡＢＣ'), compactName('abc'));
 });
 
-test('声明作品名后，带作品的写法会去掉前缀再比较', () => {
+test('识别内置作品前缀，也支持手动声明其他作品', () => {
     assert.ok(hit('主角:雷电将军', ['原神·雷电将军'], ['原神']));
     assert.ok(hit('主角:雷电将军', ['原神雷电将军'], ['原神']));
-    assert.equal(hit('主角:雷电将军', ['原神·雷电将军'], []), false);
+    assert.ok(hit('主角:雷电将军', ['原神·雷电将军']));
+    assert.ok(hit('主角:雷电将军', ['Genshin Impact：雷电将军']));
+    assert.equal(hit('主角:雷电将军', ['其他作品·雷电将军']), false);
+    assert.ok(hit('主角:雷电将军', ['其他作品·雷电将军'], ['其他作品']));
+});
+
+test('全名和简称双向匹配，作品前缀不会截断全名', () => {
+    assert.ok(hit('丽莎·敏兹', ['原神·丽莎']));
+    assert.ok(hit('原神·丽莎', ['丽莎·敏兹']));
+    assert.ok(hit('主角:原神·丽莎', ['丽莎·敏兹']));
+    assert.ok(hit('丽莎·敏兹', ['丽莎']));
+    assert.equal(hit('丽莎·敏兹', ['丽莎·琼斯']), false);
+    assert.equal(hit('小丽莎', ['丽莎']), false);
 });
 
 // ---- 名单驱动替换与复制 ----
