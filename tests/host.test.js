@@ -38,7 +38,10 @@ function fixture() {
         assert.equal(opts.cache, 'no-store');
         assert.equal(opts.headers['X-CSRF-Token'], 'test-only');
         const body = JSON.parse(opts.body);
-        if (path.endsWith('/list')) return { ok: true, json: async () => f.deleted ? [] : [{ file_id: '目标', name: '不同显示名' }] };
+        if (path.endsWith('/list')) return { ok: true, json: async () => [
+            ...f.deleted ? [] : [{ file_id: '目标', name: '不同显示名' }],
+            ...f.source ? [{ file_id: '母本' }] : [],
+        ] };
         if (path.endsWith('/edit')) {
             f.writes++;
             assert.equal(body.name, '目标');
@@ -48,6 +51,7 @@ function fixture() {
             return { ok: !f.failWrite, status: f.failWrite ? 500 : 200 };
         }
         assert.ok(path.endsWith('/get'));
+        if (body.name === '母本') return { ok: true, json: async () => clone(f.source) };
         assert.equal(body.name, '目标');
         f.reads++;
         if (f.writes) {
@@ -123,6 +127,23 @@ test('内容相同不写入', async () => {
     assert.equal(f.writes, 0);
     assert.equal(result.changed, false);
     assert.match(result.note, /相同/);
+});
+
+test('写入前再次核对母本，等待期间母本变化时零写入并允许重新预览', async () => {
+    const f = fixture();
+    f.source = clone(initial);
+    const source = { name: '母本', data: clone(f.source) };
+    f.onWait = () => { f.source = otherEdit(); };
+    await assert.rejects(f.service.updateDirect('目标', initial, updated(), source), /「母本」.*发生了变化/);
+    assert.equal(f.writes, 0);
+    assert.equal(f.events.length, 0);
+    assert.deepEqual(f.disk, initial);
+    assert.equal(f.service.requiresReload, false);
+
+    f.onWait = null;
+    const result = await f.service.updateDirect('目标', initial, updated(), { name: '母本', data: f.source });
+    assert.deepEqual(result.data, updated());
+    assert.equal(f.writes, 1);
 });
 
 test('缓存模块无法导入或导出不可用时，明确报错且不写入', async () => {

@@ -262,6 +262,11 @@ function entrySignature(entry) {
     return canonical(value);
 }
 
+function isStandaloneShortTitle(title, fullTitle, workKeys) {
+    const name = fullNameKey(title, workKeys);
+    return /^\p{Script=Han}$/u.test(name) && name === shortNameKey(fullTitle, workKeys);
+}
+
 export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, reviewReasons, workKeys = []) {
     const result = new Map(), paired = new Set(pairs.map(p => String(p.newId)));
     const primaryNames = new Map(), signatures = new Map();
@@ -287,10 +292,14 @@ export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, re
     for (const [id, entry] of Object.entries(newBook.entries)) {
         if (paired.has(id)) { result.set(id, 'paired'); continue; }
         const name = entry.comment?.trim() || '', signature = keySignature(entry);
+        const unconfirmedShortNames = new Set();
         const targets = new Set(name ? [...titleMatches(targetTitles, name, workKeys)].filter(targetId => {
             const target = oldBook.entries[targetId];
-            return !singleNamePair(entry, target, workKeys) || (isSingleName(name, workKeys) && isSingleName(target.comment, workKeys))
-                || sharedPrimaryKeyword(entry, target, workKeys, true);
+            if (!singleNamePair(entry, target, workKeys) || (isSingleName(name, workKeys) && isSingleName(target.comment, workKeys))
+                || sharedPrimaryKeyword(entry, target, workKeys, true)) return true;
+            if (!isStandaloneShortTitle(name, target.comment, workKeys) && !isStandaloneShortTitle(target.comment, name, workKeys)) return false;
+            unconfirmedShortNames.add(targetId);
+            return true;
         }) : []);
         const fullName = fullNameKey(name, workKeys);
         if (corroboratingKeyword(fullName, workKeys)) {
@@ -309,7 +318,8 @@ export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, re
         result.set(id, targets.size || duplicate || unnamed ? 'review' : 'new');
         if (reviewReasons && targets.size) {
             const examples = new Set([...targets].slice(0, 2).map(targetId => title(oldBook.entries[targetId])));
-            reviewReasons.set(id, `目标书候选 ${targets.size} 条（${[...examples].join('、')}${targets.size > 2 ? '等' : ''}）`);
+            const shortReason = [...targets].some(targetId => unconfirmedShortNames.has(targetId)) ? '单字简称缺少主关键词佐证 · ' : '';
+            reviewReasons.set(id, `${shortReason}目标书候选 ${targets.size} 条（${[...examples].join('、')}${targets.size > 2 ? '等' : ''}）`);
         } else if (reviewReasons && unnamed) reviewReasons.set(id, '母本缺少标题和主关键词');
         else if (reviewReasons && duplicate) reviewReasons.set(id, '母本有重名且主关键词相同的条目');
         if (reviewTargets) for (const targetId of targets) reviewTargets.add(targetId);
@@ -405,9 +415,10 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
         const approved = new Set((options.approvedNew || []).map(String));
         const seen = new Set(Object.values(next.entries).map(entrySignature)), requested = new Set(), used = new Set(Object.keys(next.entries));
         if (Array.isArray(next.originalData?.entries)) for (const entry of next.originalData.entries) {
-            for (const id of [entry.id, entry.uid]) if (id !== undefined && /^(0|[1-9]\d*)$/.test(String(id))) used.add(String(id));
+            for (const id of [entry?.id, entry?.uid]) if (id !== undefined && /^(0|[1-9]\d*)$/.test(String(id))) used.add(String(id));
         }
-        const portableSources = new Map((Array.isArray(newBook.originalData?.entries) ? newBook.originalData.entries : []).map(entry => [String(entry.id ?? entry.uid), entry]));
+        const sourceMirrors = Array.isArray(newBook.originalData?.entries) ? newBook.originalData.entries : [];
+        const portableSources = new Map(sourceMirrors.filter(record).map(entry => [String(entry.id ?? entry.uid), entry]));
         let uid = 0;
         let total = Object.keys(next.entries).length;
         let displayIndex = Math.ceil(Object.entries(next.entries).reduce((m, [id, entry]) => Math.max(m, Number.isFinite(entry.displayIndex) ? entry.displayIndex : Number(id)), -1));
