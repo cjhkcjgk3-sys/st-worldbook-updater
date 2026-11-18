@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, planBatchConsolidation, planBatchMatchedDeletion, scopeMatch, workKeysOf } from '../core.js';
+import { autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildTargetSelfConsolidation, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, diffLines, matchRosterEntries, planBatchConsolidation, planBatchMatchedDeletion, planTargetSelfDuplicates, scopeMatch, workKeysOf } from '../core.js';
 
 const e = (uid, comment, key, content = '正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(entry => [String(entry.uid), entry])) });
@@ -441,4 +441,36 @@ test('批量匹配删除按母本勾选批量移除目标书对应条目（含1�
     assert.equal(res.removed, 3);
     assert.deepEqual(Object.keys(res.data.entries).sort(), ['4', '5']);
     assert.equal(res.data.entries['5'].content, '保留设定');
+});
+
+test('简繁体角色名与主关键词自动对齐，并支持目标书内部去重与行级差异对比', () => {
+    const mother = book(
+        e(10, '钟离', ['钟离', '岩王帝君'], '新钟离'),
+        e(11, '绝区零·爱丽丝', ['爱丽丝'], '新爱丽丝'),
+    );
+    const target = book(
+        e(1, '鍾離', ['鍾離', '岩王帝君'], '旧钟离'),
+        e(2, '絕區零·愛麗絲', ['愛麗絲'], '旧爱丽丝'),
+        e(3, '絕區零·愛麗絲', ['愛麗絲'], '重复爱丽丝'),
+    );
+    const pairs = autoMatch(target, mother, ['绝区零']);
+    assert.equal(pairs.some(p => p.oldId === '1' && p.newId === '10'), true);
+    const roster = matchRosterEntries(target, mother, [['鍾離']], { workKeys: ['绝区零'] });
+    assert.equal(roster.pairs.length, 1);
+
+    const selfPlan = planTargetSelfDuplicates(target, { workKeys: ['绝区零'] });
+    assert.equal(selfPlan.groups.length, 1);
+    assert.equal(selfPlan.removedCount, 1);
+    const deduped = buildTargetSelfConsolidation(target, selfPlan.groups);
+    assert.equal(deduped.data.entries['3'], undefined);
+    assert.ok(deduped.data.entries['2']);
+
+    const diff = diffLines('第一行\n旧第二行\n第三行', '第一行\n新第二行\n第三行\n第四行');
+    assert.deepEqual(diff, [
+        { type: 'same', text: '第一行' },
+        { type: 'del', text: '旧第二行' },
+        { type: 'add', text: '新第二行' },
+        { type: 'same', text: '第三行' },
+        { type: 'add', text: '第四行' },
+    ]);
 });
