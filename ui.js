@@ -1,4 +1,5 @@
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
+const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, unmatchedNames, workKeysOf } from './core.js';
 
@@ -95,7 +96,7 @@ export class UpdaterWindow {
                 <button type="button" class="menu_button stwu-icon-button stwu-close-button" data-action="close" aria-label="关闭窗口" title="关闭窗口"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
               </div>
             </header>
-            <div class="stwu-notice" role="status" aria-live="polite">先选择原世界书，再选择新版或打开 JSON 文件。</div>
+            <div class="stwu-notice" role="status" aria-live="polite">请选择母本和目标书。母本也可以从 JSON 文件打开。</div>
             <div class="stwu-tools" aria-label="配对、名单与条目设置">
               <details class="stwu-tool stwu-pairbar">
                 <summary class="menu_button"><i class="fa-solid fa-link" aria-hidden="true"></i><span>配对操作</span></summary>
@@ -105,6 +106,7 @@ export class UpdaterWindow {
                     <button type="button" class="menu_button" data-pair-btn="auto">重新匹配</button>
                     <button type="button" class="menu_button" data-pair-btn="auto-reset">重置配对</button>
                     <button type="button" class="menu_button" data-pair-btn="unpair-all">全部解除</button>
+                    <button type="button" class="menu_button" data-action="swap-sides">交换左右</button>
                   </div>
                   <span class="stwu-pairhint">点击两侧条目后，可在此配对或解除</span>
                 </div>
@@ -114,7 +116,7 @@ export class UpdaterWindow {
                 <div class="stwu-tool-content stwu-scope-content">
                   <label for="stwu-scope-input">名单限定替换范围；搜索只改变列表显示。</label>
                   <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
-                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制来源条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
+                  <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制母本条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
                   <p class="stwu-scope-report" data-scope-report role="status"></p>
                   <details class="stwu-scope-spec"><summary>名单格式说明</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>没命中的名字只会列在报告里，不会参与替换。</p></details>
                 </div>
@@ -146,21 +148,21 @@ export class UpdaterWindow {
             <div class="stwu-workspace" data-preview-open="false" data-split="balanced">
               <section class="stwu-entry-window" aria-label="条目对照窗口">
               <div class="stwu-panels">
-                <section class="stwu-pane" data-side="old" aria-label="原世界书">
-                  <div class="stwu-pane-head"><h3>原世界书</h3><span class="stwu-count"></span></div>
-                  <select class="text_pole" aria-label="选择原世界书" data-book="old"></select>
-                  <div class="stwu-source-line">原书独有条目会保留</div>
-                  <input class="text_pole" type="search" data-search="old" aria-label="搜索原世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
-                  <ol class="stwu-list" data-list="old" aria-label="原世界书条目"></ol>
-                  <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="old" aria-label="原书每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="old:-1" aria-label="原书上一页">‹</button><span data-page-status="old">0 / 0</span><button type="button" class="menu_button" data-page-step="old:1" aria-label="原书下一页">›</button></div>
-                </section>
-                <section class="stwu-pane" data-side="new" aria-label="新版世界书">
-                  <div class="stwu-pane-head"><h3>新版世界书</h3><span class="stwu-count"></span></div>
-                  <select class="text_pole" aria-label="选择新版世界书" data-book="new"></select>
+                <section class="stwu-pane" data-side="new" aria-label="母本">
+                  <div class="stwu-pane-head"><h3>母本</h3><span class="stwu-count"></span></div>
+                  <select class="text_pole" aria-label="选择母本" data-book="new"></select>
                   <div class="stwu-source-line"><button type="button" class="menu_button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
-                  <input class="text_pole" type="search" data-search="new" aria-label="搜索新版世界书条目" placeholder="搜索标题、关键词" autocomplete="off">
-                  <ol class="stwu-list" data-list="new" aria-label="新版世界书条目"></ol>
-                  <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="新版每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="新版上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="新版下一页">›</button></div>
+                  <input class="text_pole" type="search" data-search="new" aria-label="搜索母本条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <ol class="stwu-list" data-list="new" aria-label="母本条目"></ol>
+                  <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="母本每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="母本上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="母本下一页">›</button></div>
+                </section>
+                <section class="stwu-pane" data-side="old" aria-label="目标书">
+                  <div class="stwu-pane-head"><h3>目标书</h3><span class="stwu-count"></span></div>
+                  <select class="text_pole" aria-label="选择目标书" data-book="old"></select>
+                  <div class="stwu-source-line">目标书独有条目会保留</div>
+                  <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <ol class="stwu-list" data-list="old" aria-label="目标书条目"></ol>
+                  <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="old" aria-label="目标书每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="old:-1" aria-label="目标书上一页">‹</button><span data-page-status="old">0 / 0</span><button type="button" class="menu_button" data-page-step="old:1" aria-label="目标书下一页">›</button></div>
                 </section>
               </div>
               <div class="stwu-resize-handle" data-resize-handle="entry" role="separator" aria-label="拖动调整条目窗口高度" title="上下拖动调整条目窗口高度"></div>
@@ -175,13 +177,13 @@ export class UpdaterWindow {
                   </div>
                 </div>
                 <div class="stwu-preview-grid">
-                  <article class="stwu-preview-pane" data-preview-side="old">
-                    <h4>原书 · <span data-preview-title="old">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="old"></p>
-                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="old">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="old"></pre></details></div>
-                  </article>
                   <article class="stwu-preview-pane" data-preview-side="new">
-                    <h4>新版 · <span data-preview-title="new">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="new"></p>
+                    <h4>母本 · <span data-preview-title="new">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="new"></p>
                     <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="new">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="new"></pre></details></div>
+                  </article>
+                  <article class="stwu-preview-pane" data-preview-side="old">
+                    <h4>目标书 · <span data-preview-title="old">未选择条目</span></h4><p class="stwu-preview-keys" data-preview-keys="old"></p>
+                    <div class="stwu-preview-scroll"><pre class="stwu-content" data-preview-content="old">点击任一条目后，正文会显示在这里。</pre><details class="stwu-entry-settings"><summary>查看条目设置</summary><pre class="stwu-content" data-preview-settings="old"></pre></details></div>
                   </article>
                 </div>
                 <div class="stwu-resize-handle" data-resize-handle="body" role="separator" aria-label="拖动调整正文窗口高度" title="上下拖动调整正文窗口高度"></div>
@@ -192,6 +194,11 @@ export class UpdaterWindow {
               <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button></div>
             </footer>
           </div></div>`;
+        try {
+            if (globalThis.localStorage.getItem(MOTHER_SIDE_KEY) === 'right') this.swapColumns();
+        } catch {
+            // The layout still works when browser storage is unavailable.
+        }
         document.body.append(this.dialog);
         for (const tool of this.dialog.querySelectorAll('.stwu-tool')) this.on(tool, 'toggle', () => {
             if (tool.open) for (const other of this.dialog.querySelectorAll('.stwu-tool')) if (other !== tool) other.open = false;
@@ -217,6 +224,17 @@ export class UpdaterWindow {
                 this.syncViewport();
             }
             if (action === 'reload') { this.closeTools(); this.run(() => this.reload()); }
+            if (action === 'swap-sides') {
+                this.swapColumns();
+                const motherOnLeft = this.find('.stwu-panels').firstElementChild.dataset.side === 'new';
+                try {
+                    globalThis.localStorage.setItem(MOTHER_SIDE_KEY, motherOnLeft ? 'left' : 'right');
+                } catch {
+                    // Keep the current layout even if the preference cannot be saved.
+                }
+                this.closeTools();
+                this.find('.stwu-pairbar > summary').focus();
+            }
             if (action === 'file') this.find('[data-file]').click();
             if (action === 'replace') this.run(() => this.apply());
             if (action === 'copy') this.run(() => this.copySelected());
@@ -276,7 +294,7 @@ export class UpdaterWindow {
             if (file) this.run(async () => {
                 if (file.size > 20 * 1024 * 1024) throw new Error('文件超过 20 MB，请先拆分世界书。');
                 const book = parseBook(await file.text());
-                if (this.hasManualDecisions() && !globalThis.confirm('更换来源会清除当前的人工配对和勾选。确认更换？')) return;
+                if (this.hasManualDecisions() && !globalThis.confirm('更换母本会清除当前的人工配对和勾选。确认更换？')) return;
                 this.newBook = book; this.newName = file.name; this.sourceKind = 'file';
                 this.repair(true); this.selectors(); this.message(`已载入 ${file.name}，自动配对 ${this.pairs.length} 组。`);
             });
@@ -303,6 +321,13 @@ export class UpdaterWindow {
     closeTools() {
         if (!this.dialog) return;
         for (const tool of this.dialog.querySelectorAll('.stwu-tool')) tool.open = false;
+    }
+
+    swapColumns() {
+        for (const selector of ['.stwu-panels', '.stwu-preview-grid']) {
+            const grid = this.find(selector);
+            grid.append(grid.firstElementChild);
+        }
     }
 
     setSplitMode(mode) {
@@ -384,7 +409,7 @@ export class UpdaterWindow {
     selectors() {
         for (const side of ['old', 'new']) {
             const select = this.find(`[data-book="${side}"]`);
-            select.replaceChildren(new Option(side === 'old' ? '选择原世界书' : '选择新版世界书', ''));
+            select.replaceChildren(new Option(side === 'old' ? '选择目标书' : '选择母本', ''));
             for (const book of this.books) select.add(new Option(book.label, 'book:' + book.name));
             if (side === 'new' && this.sourceKind === 'file' && this.newBook) select.add(new Option('文件：' + this.newName, 'file:'));
             select.value = side === 'old' ? (this.oldName ? 'book:' + this.oldName : '') : (this.newBook ? (this.sourceKind === 'file' ? 'file:' : 'book:' + this.newName) : '');
@@ -405,25 +430,26 @@ export class UpdaterWindow {
             else this.newName = '';
         }
         this.repair(); this.selectors();
-        this.message(this.oldBook && this.newBook ? `已重新载入，自动配对 ${this.pairs.length} 组。` : '先选择原世界书，再选择新版或打开 JSON 文件。');
+        this.message(this.oldBook && this.newBook ? `已重新载入，自动配对 ${this.pairs.length} 组。` : '请选择母本和目标书。母本也可以从 JSON 文件打开。');
     }
 
     async loadSide(side, value) {
         if (value === 'file:') return;
         const name = value.startsWith('book:') ? value.slice(5) : '';
+        const role = side === 'old' ? '目标书' : '母本';
         const previous = side === 'old' ? this.oldName : (this.sourceKind === 'book' ? this.newName : null);
         if (name === previous) return;
-        if (this.hasManualDecisions() && !globalThis.confirm('更换世界书会清除当前的人工配对和勾选。确认更换？')) { this.selectors(); return; }
+        if (this.hasManualDecisions() && !globalThis.confirm(`更换${role}会清除当前的人工配对和勾选。确认更换？`)) { this.selectors(); return; }
         if (side === 'old') { this.oldBook = null; this.oldName = name; }
         else { this.newBook = null; this.newName = name; this.sourceKind = 'book'; }
         this.repair(true); this.render();
-        if (!name) { this.message('请选择两边的世界书。'); return; }
-        this.message('正在读取世界书…');
+        if (!name) { this.message(`请选择${role}。`); return; }
+        this.message(`正在读取${role}…`);
         const book = await this.service.read(name);
         if (side === 'old') this.oldBook = book;
         else this.newBook = book;
         this.repair();
-        this.message(`已读取 ${name}。${this.oldBook && this.newBook ? `自动配对 ${this.pairs.length} 组。` : ''}`);
+        this.message(`已读取${role}「${name}」。${this.oldBook && this.newBook ? `自动配对 ${this.pairs.length} 组。` : ''}`);
     }
 
     hasManualDecisions() {
@@ -479,20 +505,20 @@ export class UpdaterWindow {
     }
 
     async copySourceNames() {
-        if (!this.newBook) { this.message('先选择来源世界书，再复制条目名。', true); return; }
+        if (!this.newBook) { this.message('先选择母本，再复制条目名。', true); return; }
         const names = [];
         for (const { entry } of listEntries(this.newBook)) {
             const name = cleanEntryName(entry.comment || '') || title(entry);
             if (name && !names.includes(name)) names.push(name);
         }
-        if (!names.length) { this.message('来源世界书没有可用的条目名。', true); return; }
+        if (!names.length) { this.message('母本没有可用的条目名。', true); return; }
         const text = names.map(name => /[,，、=＝;；|｜\n\r"]/u.test(name) || /^(?:作品别名|作品|work)\s*[:：]/i.test(name) ? JSON.stringify(name) : name).join('\n');
         try {
             if (!navigator.clipboard?.writeText) throw new Error('clipboard');
             await navigator.clipboard.writeText(text);
-            this.message(`已复制 ${names.length} 个来源条目名；粘回名单后请核对命中和配对，避免同名误匹配。`);
+            this.message(`已复制 ${names.length} 个母本条目名；粘回名单后请核对命中和配对，避免同名误匹配。`);
         } catch {
-            this.message(`当前浏览器不允许自动复制（共 ${names.length} 个条目名）。可改用电脑浏览器，或按右侧列表手动核对。`, true);
+            this.message(`当前浏览器不允许自动复制（共 ${names.length} 个条目名）。可改用电脑浏览器，或按母本列表手动核对。`, true);
         }
     }
 
@@ -577,8 +603,8 @@ export class UpdaterWindow {
     }
 
     async applySettingsToMother() {
-        if (!this.newBook) { this.message('先选择母本世界书。', true); return; }
-        if (this.sourceKind === 'file') { this.message('母本来自 JSON 文件，不能写回；请改为选择母书。', true); return; }
+        if (!this.newBook) { this.message('先选择母本。', true); return; }
+        if (this.sourceKind === 'file') { this.message('当前母本是 JSON 文件。要保存设置，请选择酒馆里已有的世界书作为母本。', true); return; }
         const patch = this.collectSettingsPatch();
         const keys = Object.keys(patch);
         if (!keys.length) { this.message('先选一个要修改的设置字段。', true); return; }
@@ -605,7 +631,7 @@ export class UpdaterWindow {
     }
 
     async syncSettingsToTarget() {
-        if (!this.oldBook || !this.newBook) { this.message('先选择两侧世界书。', true); return; }
+        if (!this.oldBook || !this.newBook) { this.message('先选择母本和目标书。', true); return; }
         const patch = this.collectSettingsPatch();
         const keys = Object.keys(patch);
         if (!keys.length) { this.message('先选一个要同步的设置字段。', true); return; }
@@ -704,7 +730,7 @@ export class UpdaterWindow {
             if (pair) { pair.checked = select; this.pairChecks.set(id, select); }
         }
         this.selectionCountsValid = false;
-        this.message(select ? `已勾选新版列表当前搜索结果，共 ${rows.length} 条。` : `已取消当前搜索结果的勾选，共 ${rows.length} 条。`);
+        this.message(select ? `已勾选母本当前搜索结果，共 ${rows.length} 条。` : `已取消母本当前搜索结果的勾选，共 ${rows.length} 条。`);
         this.render();
     }
 
@@ -860,18 +886,18 @@ export class UpdaterWindow {
                 const check = element('input'); check.type = 'checkbox';
                 check.checked = side === 'new' ? this.isEntryChecked(id) : !!pair && this.isEntryChecked(pair.newId);
                 check.disabled = this.busy || (side === 'old' && !pair);
-                check.setAttribute('aria-label', `${side === 'old' && !pair ? '原书独有条目，不能选择来源' : '选择条目'}：${title(entry)}`);
+                check.setAttribute('aria-label', `${side === 'old' && !pair ? '目标书独有条目，无法勾选' : '选择条目'}：${title(entry)}`);
                 label.append(check); li.append(label);
             }
             const button = element('button', 'menu_button stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
             button.setAttribute('aria-pressed', String(li.classList.contains('stwu-entry-selected')));
             button.append(element('span', 'stwu-entry-title', title(entry)));
             const state = side === 'new' ? this.incoming().get(id) : null;
-            const unpairedLabel = side === 'old' ? '原书独有 · 保留'
+            const unpairedLabel = side === 'old' ? '目标书独有 · 保留'
                 : !this.inScope(id) ? '名单外'
                 : state === 'duplicate' ? '内容重复 · 可复制'
                 : state === 'review' ? '待核对 · 可复制'
-                : state === 'new' ? '未配对 · 可复制' : '待载入原书';
+                : state === 'new' ? '未配对 · 可复制' : '待载入目标书';
             li.classList.toggle('stwu-entry-pinned', pinned.has(id));
             const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + (pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel));
             status.classList.toggle('stwu-paired', !!pair); button.append(status);
@@ -990,14 +1016,14 @@ export class UpdaterWindow {
         const pairs = this.pairs.map(pair => ({ ...pair, checked: selectedUpdateIds.has(pair.newId) }));
         const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode);
         if (!result.updated) { this.message(`所选配对条目没有需要替换的内容。${result.skipped ? `无变化 ${result.skipped} 组已跳过。` : ''}`); return; }
-        const scope = this.mode === 'content' ? '仅替换正文，保留原设置' : '完整更新条目，同步新版标题、关键词及设置';
+        const scope = this.mode === 'content' ? '仅替换正文，保留目标书设置' : '完整更新条目，同步母本的标题、关键词和设置';
         const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.join('、')}；名单外不参与替换。\n` : '处理范围：整本。\n';
         const visible = new Set(this.visibleSourceIds());
         const hidden = [...selectedUpdateIds].filter(id => !visible.has(id)).length;
         const hiddenNote = hidden ? `其中 ${hidden} 条被搜索隐藏，但仍参与替换。\n` : '';
         const skipNote = result.skipped ? `无变化 ${result.skipped} 组将跳过。\n` : '';
-        if (!globalThis.confirm(`将把“${this.newName}”中的 ${result.updated} 条已配对内容替换到“${this.oldName}”。\n${scopeNote}替换范围：${scope}。\n${hiddenNote}${skipNote}确认继续？`)) return;
-        this.message('正在保存并核验世界书…');
+        if (!globalThis.confirm(`将用母本「${this.newName}」的内容替换目标书「${this.oldName}」中已配对的 ${result.updated} 条条目。\n${scopeNote}替换范围：${scope}。\n${hiddenNote}${skipNote}确认继续？`)) return;
+        this.message('正在保存并核验目标书…');
         const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
@@ -1011,22 +1037,22 @@ export class UpdaterWindow {
     }
 
     async copySelected() {
-        if (!this.oldBook || !this.newBook) throw new Error('请先载入原书和母本。');
+        if (!this.oldBook || !this.newBook) throw new Error('请先载入母本和目标书。');
         const visible = new Set(this.visibleSourceIds());
         const selectedIds = this.selectedCopyIds();
         const additions = selectedIds.filter(id => visible.has(id) && this.newBook.entries[id]);
         const hidden = selectedIds.length - additions.length;
-        if (!additions.length) { this.message('当前搜索结果里没有已勾选的来源条目。'); return; }
+        if (!additions.length) { this.message('母本当前搜索结果里没有已勾选的条目。'); return; }
         const selected = new Set(additions);
         const overridden = this.pairs.filter(pair => selected.has(pair.newId));
         const pairs = this.pairs.filter(pair => !selected.has(pair.newId)).map(pair => ({ ...pair, checked: false }));
         const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode, { merge: true, additions, forceAdditions: additions });
         const names = additions.slice(0, 12).map(id => `- ${title(this.newBook.entries[id])}`).join('\n');
         const more = additions.length > 12 ? `\n- 另有 ${additions.length - 12} 条` : '';
-        const conflicts = overridden.length ? `\n其中 ${overridden.length} 条已有配对：本次只复制，不替换原配对目标；成功后改为配对新副本。` : '';
+        const conflicts = overridden.length ? `\n其中 ${overridden.length} 条已有配对：本次会保留目标书中原已配对的条目，复制成功后改为配对新副本。` : '';
         const hiddenNote = hidden ? `\n另有 ${hidden} 条手工勾选被搜索隐藏，本次不复制。` : '';
-        if (!globalThis.confirm(`将从“${this.newName}”向“${this.oldName}”复制以下 ${result.added} 条完整条目：\n${names}${more}${conflicts}${hiddenNote}\n复制不受定点名单限制；即使已有相同副本也会再次复制。确认继续？`)) return;
-        this.message('正在复制并核验世界书…');
+        if (!globalThis.confirm(`将从母本「${this.newName}」向目标书「${this.oldName}」复制以下 ${result.added} 条完整条目：\n${names}${more}${conflicts}${hiddenNote}\n复制不受定点名单限制；即使已有相同副本也会再次复制。确认继续？`)) return;
+        this.message('正在向目标书复制条目并核验…');
         const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;

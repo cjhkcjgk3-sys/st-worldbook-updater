@@ -9,7 +9,7 @@ const makeBook = prefix => ({ entries: Object.fromEntries(Array.from({ length: 3
     uid: i, comment: `测试条目 ${String(i + 1).padStart(2, '0')}`, key: [`条目 ${i + 1}`],
     content: `${prefix}正文 ${i + 1}\n${'这是一段用于检查长正文滚动与区域拉伸的测试内容。\n'.repeat(150)}`,
 }])) });
-const books = new Map([['测试原书', makeBook('原书')], ['测试新版', makeBook('新版')]]);
+const books = new Map([['测试目标书', makeBook('目标书')], ['测试母本', makeBook('母本')]]);
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
 const server = http.createServer(async (req, res) => {

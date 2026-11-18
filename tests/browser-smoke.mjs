@@ -44,7 +44,7 @@ const newer = book([
 ]);
 const state = { books: null, writes: 0, failWrite: false, failReadAfterWrite: false };
 function reset() {
-    state.books = new Map([['演示_旧版', structuredClone(old)], ['演示_新版', structuredClone(newer)]]);
+    state.books = new Map([['演示_目标书', structuredClone(old)], ['演示_母本', structuredClone(newer)]]);
     state.writes = 0; state.failWrite = false; state.failReadAfterWrite = false;
 }
 reset();
@@ -101,11 +101,11 @@ async function prepare(width = 390, height = 844, context = null, allowNoUpdates
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(url); await page.waitForFunction(() => window.__ready);
     await page.getByRole('button', { name: '打开世界书更新器', exact: true }).click();
-    await page.locator('[data-book="old"] option[value="book:演示_旧版"]').waitFor({ state: 'attached' });
-    await page.locator('[data-book="old"]').selectOption('book:演示_旧版');
+    await page.locator('[data-book="old"] option[value="book:演示_目标书"]').waitFor({ state: 'attached' });
+    await page.locator('[data-book="old"]').selectOption('book:演示_目标书');
     await page.locator('[data-book="new"]').waitFor({ state: 'visible' });
     await page.waitForFunction(() => !document.querySelector('[data-book="new"]').disabled);
-    await page.locator('[data-book="new"]').selectOption('book:演示_新版');
+    await page.locator('[data-book="new"]').selectOption('book:演示_母本');
     await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
     if (!allowNoUpdates) await page.waitForFunction(() => !document.querySelector('[data-action="replace"]').disabled);
     await page.evaluate(() => document.fonts.ready);
@@ -178,6 +178,13 @@ try {
             return { dLeft: d.left, dRight: d.right, cLeft: c.left, cRight: c.right, viewportW: innerWidth };
         });
         assert.ok(drawerBounds.cLeft >= drawerBounds.dLeft - 1 && drawerBounds.cRight <= drawerBounds.dRight + 1 && drawerBounds.cRight <= drawerBounds.viewportW + 1, JSON.stringify(drawerBounds));
+        const copyNames = page.getByRole('button', { name: '复制母本条目名', exact: true });
+        const copyNameLines = await copyNames.evaluate(button => {
+            const text = document.createRange();
+            text.selectNodeContents(button);
+            return text.getClientRects().length;
+        });
+        assert.equal(copyNameLines, 1, '复制母本条目名应保持单行');
         // Click outside closes open drawer
         await page.locator('.stwu-header h2').click();
         assert.equal(await page.locator('.stwu-scope').getAttribute('open'), null);
@@ -202,15 +209,15 @@ try {
         assert.equal(await page.locator('.stwu-workspace').getAttribute('data-preview-open'), 'false');
 
         assert.deepEqual(errors, []);
-        results.push(`布局 ${w}×${h}、抽屉防溢出、双窗防叠层、高度循环切换与纯文本预览通过`);
+        results.push(`布局 ${w}×${h}、抽屉防溢出、复制母本条目名保持单行、双窗防叠层、高度循环切换与纯文本预览通过`);
         await ctx.close();
     }
 
     // 150-entry pagination & page jump
     reset(); {
         const manyBook = book(Array.from({ length: 150 }, (_, i) => entry(i, `角色 ${String(i + 1).padStart(3, '0')}`, [`角色 ${i + 1}`], `正文 ${i + 1}`)));
-        const manyNew = book(Array.from({ length: 150 }, (_, i) => entry(i + 500, `角色 ${String(i + 1).padStart(3, '0')}`, [`角色 ${i + 1}`], `新版正文 ${i + 1}`)));
-        state.books = new Map([['演示_旧版', manyBook], ['演示_新版', manyNew]]);
+        const manyNew = book(Array.from({ length: 150 }, (_, i) => entry(i + 500, `角色 ${String(i + 1).padStart(3, '0')}`, [`角色 ${i + 1}`], `母本正文 ${i + 1}`)));
+        state.books = new Map([['演示_目标书', manyBook], ['演示_母本', manyNew]]);
         const { page, ctx } = await prepare(390, 844);
         assert.equal(await page.locator('[data-list="old"] .stwu-entry').count(), 25);
         assert.equal(await page.locator('[data-page-status="old"]').textContent(), '1 / 6');
@@ -290,11 +297,29 @@ try {
         await page.locator('[data-pair-toggle]').click();
         assert.equal(await page.locator('[data-pair-toggle]').textContent(), '解除配对');
         assert.match(await page.locator('.stwu-selection:not(.stwu-selection-compact)').textContent(), /可替换 2 组/);
-        page.once('dialog', d => d.accept());
+        const swap = page.getByRole('button', { name: '交换左右', exact: true });
+        assert.equal(await page.locator('.stwu-pane').first().getAttribute('data-side'), 'new');
+        assert.equal(await page.locator('.stwu-preview-pane').first().getAttribute('data-preview-side'), 'new');
+        await page.locator('[data-search="new"]').fill('共同标题');
+        await openTool(page, 'stwu-pairbar');
+        await swap.click();
+        assert.equal(await swap.isVisible(), false);
+        assert.equal(await page.locator('.stwu-pane').last().getAttribute('data-side'), 'new');
+        assert.equal(await page.locator('.stwu-preview-pane').last().getAttribute('data-preview-side'), 'new');
+        assert.equal(await page.locator('[data-book="new"]').inputValue(), 'book:演示_母本');
+        assert.equal(await page.locator('[data-book="old"]').inputValue(), 'book:演示_目标书');
+        assert.equal(await page.locator('[data-search="new"]').inputValue(), '共同标题');
+        assert.equal(await page.locator('[data-list="new"] [data-id="91"] input').isChecked(), true);
+        assert.equal(await page.locator('[data-list="old"] [data-id="1"] input').isChecked(), true);
+        assert.equal(await page.locator('[data-preview-content="new"]').textContent(), '新共同正文');
+        assert.equal(state.writes, 0);
+        let replaceConfirmation;
+        page.once('dialog', d => { replaceConfirmation = d.message(); return d.accept(); });
         await page.locator('[data-action="replace"]').click();
+        assert.match(replaceConfirmation, /母本「演示_母本」.*目标书「演示_目标书」/);
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验并替换'));
         assert.equal(state.writes, 1);
-        const persisted = state.books.get('演示_旧版');
+        const persisted = state.books.get('演示_目标书');
         assert.equal(persisted.entries[0].uid, 0);
         assert.equal(persisted.entries[1].content, '新共同正文');
         assert.equal(persisted.customMetadata, '保留');
@@ -304,7 +329,15 @@ try {
         await page.evaluate(() => window.__extension.onDisable());
         assert.equal(await page.locator('.stwu-dialog,#st-worldbook-updater-launcher').count(), 0);
         assert.equal(await page.evaluate(() => [...window.__host.events.values()].reduce((n, s) => n + s.size, 0)), 0);
-        results.push('二合一配对/解除、替换核验、刷新与禁用清理通过');
+        assert.deepEqual(state.books.get('演示_母本'), newer);
+        const reopened = await prepare(390, 844, ctx, true);
+        assert.equal(await reopened.page.locator('.stwu-pane').last().getAttribute('data-side'), 'new');
+        await openTool(reopened.page, 'stwu-pairbar');
+        await reopened.page.getByRole('button', { name: '交换左右', exact: true }).click();
+        assert.equal(await reopened.page.locator('.stwu-pane').first().getAttribute('data-side'), 'new');
+        await assertLayout(reopened.page);
+        assert.deepEqual(reopened.errors, []);
+        results.push('配对后换边、勾选和搜索保留、替换写入目标书、换边记忆及禁用清理通过');
         await ctx.close();
     }
 
@@ -313,10 +346,12 @@ try {
         const { page, ctx } = await prepare();
         await page.locator('[data-list="new"] [data-id="90"] input').uncheck();
         await page.locator('[data-list="new"] [data-id="94"] input').check();
-        page.once('dialog', d => d.accept());
+        let copyConfirmation;
+        page.once('dialog', d => { copyConfirmation = d.message(); return d.accept(); });
         await page.locator('[data-action="copy"]').click();
+        assert.match(copyConfirmation, /母本「演示_母本」.*目标书「演示_目标书」/);
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：复制 1 条'));
-        assert.equal(Object.keys(state.books.get('演示_旧版').entries).length, 7);
+        assert.equal(Object.keys(state.books.get('演示_目标书').entries).length, 7);
         await page.locator('[data-file]').setInputFiles({ name: '坏文件.json', mimeType: 'application/json', buffer: Buffer.from('{') });
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.includes('JSON 格式不正确'));
         page.once('dialog', d => d.accept());
@@ -333,8 +368,8 @@ try {
         await page.locator('[data-action="replace"]').click();
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.includes('服务器未确认保存'));
         assert.equal(await page.locator('[data-action="replace"]').isDisabled(), true);
-        assert.deepEqual(state.books.get('演示_旧版'), old);
-        results.push('HTTP 保存失败锁保护且不损坏原书通过');
+        assert.deepEqual(state.books.get('演示_目标书'), old);
+        results.push('HTTP 保存失败锁保护且不损坏目标书通过');
         await ctx.close();
     }
 
