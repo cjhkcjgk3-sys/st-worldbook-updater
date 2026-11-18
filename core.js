@@ -394,6 +394,7 @@ export function setBookEntrySettings(book, id, values) {
 // 尾巴偶尔带 `〔2 楼 · 回复 211/247〕` 这类元数据，比较前都要剥掉。
 export const BUILTIN_CATEGORIES = Object.freeze(['角色', '主角', '配角', '地点', '组织', '道具', '玩法', '章节剧情', '角色内心', '剧情大纲', '文风配置']);
 const BUILTIN_WORK_PREFIXES = new Set(['原神', 'genshin', 'genshinimpact']);
+const CHARACTER_NAME_VARIANTS = new Map([['哥伦比亚', '哥伦比娅']]);
 const OPEN_BRACKETS = '(（[［{｛【〔〖「『《〈<＜';
 const CLOSE_BRACKETS = ')）]］}｝】〕〗」』》〉>＞';
 
@@ -518,17 +519,32 @@ function nameWithoutPrefixes(name, workKeys) {
     return base;
 }
 
+function normalizeCharacterName(name, workKeys) {
+    const base = String(nameWithoutPrefixes(name, workKeys) ?? '');
+    const [first, ...rest] = base.split(/(?=[·・‧(（])/u);
+    const canonical = CHARACTER_NAME_VARIANTS.get(compactName(first));
+    return canonical ? canonical + rest.join('') : base;
+}
+
 function exactNameKeys(name, workKeys) {
-    const base = nameWithoutPrefixes(name, workKeys);
-    return [...labelVariants(base), parseScopedName(base, workKeys).key, compactName(name)].filter(Boolean);
+    const base = normalizeCharacterName(name, workKeys);
+    return [...labelVariants(base), parseScopedName(base, workKeys).key, compactName(name)]
+        .filter(Boolean).map(key => CHARACTER_NAME_VARIANTS.get(key) ?? key);
 }
 
 // 带间隔号的中文全名可以用首段查找。完整姓名之间仍按各自全名比较。
 function shortNameKey(name, workKeys) {
-    const base = nameWithoutPrefixes(name, workKeys);
+    const base = normalizeCharacterName(name, workKeys);
     const { outside } = splitBrackets(base);
-    const match = outside.trim().match(/^([\p{Script=Han}]{1,3})\s*[·・‧]\s*\p{Script=Han}{2,}(?:\s*[·・‧]\s*\p{Script=Han}{2,})*$/u);
+    const match = outside.trim().match(/^(\p{Script=Han}+)(?:\s*[·・‧]\s*\p{Script=Han}+)+$/u);
     return match?.[1] || '';
+}
+
+function compoundTitleNames(title, workKeys) {
+    const { outside } = splitBrackets(nameWithoutPrefixes(title, workKeys));
+    const names = outside.split(/[、，,]/u).map(name => name.trim());
+    return names.length > 1 && names.every(name => /^\p{Script=Han}+(?:\s*[·・‧]\s*\p{Script=Han}+)*$/u.test(name))
+        ? names : [];
 }
 
 /** 条目可用于精确比较的键：完整名、去前缀的主名、括号里的别名和主要关键词。 */
@@ -591,8 +607,8 @@ export function parseNameList(text, { includeGroups = false } = {}) {
     return includeGroups ? { ...result, groups } : result;
 }
 
-function rosterIndex(book, workKeys, includeKeywords = true) {
-    const exact = new Map(), short = new Map();
+function rosterIndex(book, workKeys, { includeKeywords = true, target = false } = {}) {
+    const exact = new Map(), short = new Map(), compound = new Set();
     const add = (index, key, id) => {
         if (!index.has(key)) index.set(key, []);
         index.get(key).push(id);
@@ -602,8 +618,18 @@ function rosterIndex(book, workKeys, includeKeywords = true) {
         for (const key of entryNameCandidates(names, workKeys)) add(exact, key, id);
         const shortTitle = shortNameKey(entry.comment, workKeys);
         if (shortTitle) add(short, shortTitle, id);
+        const [primary, ...secondary] = target ? compoundTitleNames(entry.comment, workKeys) : [];
+        if (primary) {
+            compound.add(id);
+            // The first name identifies the entry. Companion names only flag a possible existing entry.
+            for (const name of (includeKeywords ? [primary, ...secondary] : [primary])) {
+                for (const key of new Set(exactNameKeys(name, workKeys))) add(exact, key, id);
+            }
+            const shortPrimary = shortNameKey(primary, workKeys);
+            if (shortPrimary) add(short, shortPrimary, id);
+        }
     }
-    return { exact, short };
+    return { exact, short, compound };
 }
 
 function rosterHits(index, keys, shortKeys = []) {
@@ -623,8 +649,8 @@ export function matchRosterEntries(oldBook, newBook, groups, {
     workKeys = [], manualPairs = [], unpairedOld = new Set(), unpairedNew = new Set(),
 } = {}) {
     const sourceIndex = rosterIndex(newBook, workKeys);
-    const targetIndex = rosterIndex(oldBook, workKeys);
-    const targetTitles = rosterIndex(oldBook, workKeys, false);
+    const targetIndex = rosterIndex(oldBook, workKeys, { target: true });
+    const targetTitles = rosterIndex(oldBook, workKeys, { target: true, includeKeywords: false });
     const targetSignatures = new Set(Object.values(oldBook.entries).map(keySignature).filter(Boolean));
     const sourceSignatureCounts = new Map();
     for (const source of Object.values(newBook.entries)) {
@@ -658,7 +684,9 @@ export function matchRosterEntries(oldBook, newBook, groups, {
         const namedTargets = rosterHits(targetTitles, keys, shortKeys);
         // A source keyword matching a target title is evidence of a possible alias.
         const keywordKeys = [...entryNameCandidates({ key: source.key }, workKeys)].filter(key => !shortKeys.has(key));
-        for (const oldId of rosterHits(targetTitles, keywordKeys)) namedTargets.add(oldId);
+        for (const oldId of rosterHits(targetTitles, keywordKeys)) {
+            if (!targetTitles.compound.has(oldId)) namedTargets.add(oldId);
+        }
         const targets = rosterHits(targetIndex, keys, shortKeys);
         for (const oldId of namedTargets) targets.add(oldId);
         if (overrides.has(newId)) {
@@ -699,8 +727,10 @@ export function buildRosterUpdate(oldBook, newBook, groups, mode, options) {
     const { pairs, additions, namesById, review, missing } = matchRosterEntries(oldBook, newBook, groups, options);
     const replace = [], unchanged = [];
     for (const pair of pairs) {
-        const names = pairChanged(oldBook, newBook, pair, mode) ? replace : unchanged;
-        names.push(namesById.get(pair.newId));
+        const name = namesById.get(pair.newId);
+        if (!pairChanged(oldBook, newBook, pair, mode)) { unchanged.push(name); continue; }
+        const targetTitle = oldBook.entries[pair.oldId].comment;
+        replace.push(compoundTitleNames(targetTitle, options?.workKeys).length ? `${name} → 「${targetTitle}」（更新整条）` : name);
     }
     const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions });
     return {
