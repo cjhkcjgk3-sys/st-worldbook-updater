@@ -118,6 +118,19 @@ async function openTool(page, cls) {
     if (await details.getAttribute('open') === null) await page.locator(`.${cls} > summary`).click();
 }
 
+async function assertOneLineButton(button) {
+    const label = await button.textContent();
+    const metrics = await button.evaluate(node => {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        return {
+            lines: new Set([...range.getClientRects()].map(rect => rect.top)).size,
+            overflow: node.scrollWidth > node.clientWidth + 1,
+        };
+    });
+    assert.deepEqual(metrics, { lines: 1, overflow: false }, label);
+}
+
 async function assertLayout(page) {
     await page.locator('[data-action="replace"]').scrollIntoViewIfNeeded();
     const metrics = await page.evaluate(() => {
@@ -178,16 +191,15 @@ try {
             return { dLeft: d.left, dRight: d.right, cLeft: c.left, cRight: c.right, viewportW: innerWidth };
         });
         assert.ok(drawerBounds.cLeft >= drawerBounds.dLeft - 1 && drawerBounds.cRight <= drawerBounds.dRight + 1 && drawerBounds.cRight <= drawerBounds.viewportW + 1, JSON.stringify(drawerBounds));
-        const copyNames = page.getByRole('button', { name: '复制母本条目名', exact: true });
-        const copyNameLines = await copyNames.evaluate(button => {
-            const text = document.createRange();
-            text.selectNodeContents(button);
-            return text.getClientRects().length;
-        });
-        assert.equal(copyNameLines, 1, '复制母本条目名应保持单行');
+        await assertOneLineButton(page.getByRole('button', { name: '复制母本条目名', exact: true }));
         // Click outside closes open drawer
         await page.locator('.stwu-header h2').click();
         assert.equal(await page.locator('.stwu-scope').getAttribute('open'), null);
+        await openTool(page, 'stwu-settings');
+        for (const action of ['apply-settings', 'sync-settings']) {
+            await assertOneLineButton(page.locator(`[data-action="${action}"]`));
+        }
+        await page.locator('.stwu-header h2').click();
 
         // Preview & single reused cycle-split button + close-preview button
         await clickRow(page, 'old', '0');
@@ -209,7 +221,7 @@ try {
         assert.equal(await page.locator('.stwu-workspace').getAttribute('data-preview-open'), 'false');
 
         assert.deepEqual(errors, []);
-        results.push(`布局 ${w}×${h}、抽屉防溢出、复制母本条目名保持单行、双窗防叠层、高度循环切换与纯文本预览通过`);
+        results.push(`布局 ${w}×${h}、抽屉防溢出、名单与设置按钮保持单行、双窗防叠层、高度循环切换与纯文本预览通过`);
         await ctx.close();
     }
 
@@ -325,6 +337,134 @@ try {
         assert.equal(state.writes, 0);
         assert.deepEqual(errors, []);
         results.push('单字搜索完整项、通用关键词不制造候选、待核对原因与跨页分类勾选通过');
+        await ctx.close();
+    }
+
+    reset(); {
+        const target = book([
+            entry(1, '琴', ['琴', '代理团长'], '旧琴', { order: 42 }),
+            entry(2, '琴', ['琴', '弦乐器'], '乐器资料'),
+            entry(3, '丽莎', ['图书管理员'], '旧丽莎'),
+            entry(4, '蒙德图书馆', ['丽莎', '图书管理员'], '图书馆资料'),
+            entry(5, '尼可', ['尼可·莱恩', '魔女N', '尼可'], '旧尼可'),
+            entry(6, '哥伦比亚', ['少女', '库塔尔'], '旧少女'),
+            entry(7, '菲谢尔，奥兹', ['菲谢尔、奥兹'], '旧菲谢尔'),
+            entry(8, '爱好', ['爱'], '相同正文也不算身份'),
+            entry(9, '诸国历史', ['凯撒'], '正文也提到凯撒·金'),
+            entry(10, '露娜', ['银月祭司'], '待核对甲'),
+            entry(11, '露娜', ['银月祭司'], '待核对乙'),
+            entry(12, '双子', ['双子'], '母本有两个候选'),
+        ]);
+        const mother = book([
+            entry(101, '琴·古恩希尔德', ['琴·古恩希尔德', '代理团长'], '新琴'),
+            entry(103, '原神·丽莎·敏兹', ['图书管理员'], '新丽莎'),
+            entry(105, '尼可·莱恩', ['尼可·莱恩', '魔女「N」'], '新尼可'),
+            entry(106, '哥伦比娅·希珀塞莱妮娅', ['少女', '库塔尔', '小鸽子'], '新少女'),
+            entry(107, '菲谢尔·冯·露弗施洛斯·那菲多特', ['菲谢尔'], '新菲谢尔'),
+            entry(108, '爱情', ['爱'], '相同正文也不算身份'),
+            entry(109, '凯撒·金 (Caesar King)', ['人格'], '正文也提到凯撒·金'),
+            entry(110, '露娜·费尔', ['银月祭司'], '新露娜'),
+            entry(111, '双子', ['双子'], '母本候选甲'),
+            entry(112, '双子', ['双子'], '母本候选乙'),
+        ]);
+        state.books.set('演示_目标书', target);
+        state.books.set('演示_母本', mother);
+        const { page, ctx, errors } = await prepare(390, 844);
+        const row = (side, id) => page.locator(`[data-list="${side}"] [data-id="${id}"]`);
+        const status = (side, id) => row(side, id).locator('.stwu-entry-status').textContent();
+        const pairIds = [[1, 101], [3, 103], [5, 105], [6, 106], [7, 107]];
+        async function assertPairs(expected, changed = '有变化') {
+            for (const [oldId, newId] of expected) {
+                const targetStatus = await status('old', oldId);
+                assert.match(targetStatus, new RegExp(`配对 \\d+ · ${changed}`));
+                assert.equal(await status('new', newId), targetStatus);
+            }
+        }
+        await assertPairs(pairIds);
+        for (const id of [108, 109]) assert.equal(await status('new', id), '未配对 · 可复制');
+        for (const id of [2, 4, 8, 9]) assert.equal(await status('old', id), '目标书独有 · 保留');
+        for (const id of [110, 111, 112]) assert.match(await status('new', id), /置顶 · 待核对/);
+        for (const id of [10, 11, 12]) {
+            assert.match(await status('old', id), /置顶 · 待核对/);
+            const reviewCheckbox = row('old', id).getByRole('checkbox', { name: /^待核对目标候选/ });
+            assert.equal(await reviewCheckbox.isDisabled(), true);
+        }
+
+        const category = page.locator('[data-selection-category]');
+        const bulk = page.locator('[data-action="toggle-selection"]');
+        await category.selectOption('review');
+        assert.match(await bulk.textContent(), /勾选 3 条/);
+        await bulk.click();
+        for (const id of [110, 111, 112]) assert.equal(await row('new', id).locator('input').isChecked(), true);
+        for (const id of [108, 109]) assert.equal(await row('new', id).locator('input').isChecked(), false);
+        const targetSearch = page.locator('[data-search="old"]');
+        const targetBulk = page.locator('[data-action="toggle-target-selection"]');
+        await targetSearch.fill('琴');
+        await assertOneLineButton(targetBulk);
+        assert.match(await targetBulk.textContent(), /取消勾选 1 条/);
+        await targetBulk.click();
+        assert.equal(await row('old', 1).locator('input').isChecked(), false);
+        assert.equal(await row('new', 101).locator('input').isChecked(), false);
+        assert.equal(await row('new', 103).locator('input').isChecked(), true);
+        assert.equal(await row('new', 110).locator('input').isChecked(), true);
+        await targetBulk.click();
+        assert.equal(await row('old', 1).locator('input').isChecked(), true);
+        await targetSearch.fill('爱');
+        assert.deepEqual(await page.locator('[data-list="old"] [data-id]').evaluateAll(rows => rows.map(row => row.dataset.id)), ['8']);
+        assert.equal(await targetBulk.isDisabled(), true);
+        assert.match(await status('new', 110), /待核对/);
+        await targetSearch.fill('');
+
+        await openTool(page, 'stwu-scope');
+        const roster = page.locator('[data-scope]');
+        await roster.fill(['琴', '丽莎', '尼可', '哥伦比娅', '菲谢尔', '爱情', '凯撒·金', '露娜', '双子', '缺失角色'].join('\n'));
+        await roster.press('Tab');
+        await assertPairs(pairIds);
+        const preview = page.getByRole('button', { name: '按名单更新', exact: true });
+        const summary = page.locator('[data-roster-summary]');
+        const report = page.locator('[data-roster-report]');
+        await preview.click();
+        assert.match(await summary.textContent(), /替换 5 · 复制 2 · 无变化 0 · 待核对 2 · 母本未找到 1/);
+        const reviewReport = await report.textContent();
+        assert.match(reviewReport, /露娜.*目标书/);
+        assert.match(reviewReport, /双子.*母本/);
+        assert.equal(state.writes, 0);
+        await page.keyboard.press('Escape');
+
+        await clickRow(page, 'old', '10');
+        await clickRow(page, 'new', '110');
+        await openTool(page, 'stwu-pairbar');
+        await page.getByRole('button', { name: '配对所选', exact: true }).click();
+        await assertPairs([...pairIds, [10, 110]]);
+        for (const id of [111, 112]) assert.match(await status('new', id), /待核对/);
+        assert.match(await status('old', 12), /待核对/);
+        await openTool(page, 'stwu-scope');
+        await preview.click();
+        assert.match(await summary.textContent(), /替换 6 · 复制 2 · 无变化 0 · 待核对 1 · 母本未找到 1/);
+        assert.equal(state.writes, 0);
+        await page.getByRole('button', { name: '确认更新', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换 6 条，复制 2 条'));
+        const saved = state.books.get('演示_目标书');
+        assert.equal(state.writes, 1);
+        for (const [oldId, newId] of [...pairIds, [10, 110]]) {
+            assert.deepEqual(saved.entries[oldId], { ...target.entries[oldId], content: mother.entries[newId].content });
+        }
+        for (const id of [2, 4, 8, 9, 11, 12]) assert.deepEqual(saved.entries[id], target.entries[id]);
+        const added = Object.entries(saved.entries).filter(([id]) => !Object.hasOwn(target.entries, id));
+        assert.equal(added.length, 2);
+        assert.deepEqual(new Set(added.map(([, { comment }]) => comment)), new Set(['爱情', '凯撒·金 (Caesar King)']));
+        for (const [id, item] of added) assert.equal(String(item.uid), id);
+        assert.equal(saved.customMetadata, target.customMetadata);
+        assert.deepEqual(state.books.get('演示_母本'), mother);
+        await page.locator('.stwu-header-actions [data-action="reload"]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
+        await openTool(page, 'stwu-scope');
+        await preview.click();
+        assert.match(await summary.textContent(), /替换 0 · 复制 0/);
+        assert.equal(await page.getByRole('button', { name: '确认更新', exact: true }).isVisible(), false);
+        assert.equal(state.writes, 1);
+        assert.deepEqual(errors, []);
+        results.push('混合世界书贯通自动配对、分类勾选、名单、人工核对、UID 写入与重载去重');
         await ctx.close();
     }
 
@@ -562,6 +702,35 @@ try {
     }
 
     // Copy selected + file upload + error protections
+    reset(); {
+        const { page, ctx, errors } = await prepare();
+        page.once('dialog', dialog => dialog.accept());
+        await page.locator('[data-action="copy"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：复制 1 条'));
+        const afterCopy = state.books.get('演示_目标书');
+        const duplicate = Object.values(afterCopy.entries).find(item => item.uid !== 0 && item.comment === '角色甲');
+        assert.ok(duplicate);
+        assert.deepEqual(afterCopy.entries[0], old.entries[0]);
+        assert.equal(duplicate.content, newer.entries[90].content);
+        assert.equal(state.writes, 1);
+        await page.locator('.stwu-header-actions [data-action="reload"]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
+        const original = page.locator('[data-list="old"] [data-id="0"]');
+        assert.match(await original.locator('.stwu-entry-status').textContent(), /配对 \d+ · 有变化/);
+        await original.locator('input').check();
+
+        page.once('dialog', dialog => dialog.accept());
+        await page.locator('[data-action="replace"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验并替换'));
+        const afterReplace = state.books.get('演示_目标书');
+        assert.equal(state.writes, 2);
+        assert.deepEqual(afterReplace.entries[0], { ...old.entries[0], content: newer.entries[90].content });
+        assert.deepEqual(afterReplace.entries[duplicate.uid], duplicate);
+        assert.deepEqual(errors, []);
+        results.push('手工复制已配对条目后，后续替换仍写原配对目标 UID');
+        await ctx.close();
+    }
+
     reset(); {
         const { page, ctx } = await prepare();
         await page.locator('[data-list="new"] [data-id="90"] input').uncheck();

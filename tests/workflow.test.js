@@ -177,6 +177,45 @@ test('名单尊重手动配对和解除决定，并保护名单外的手动配�
     assert.equal(blocked.result.added + blocked.result.updated, 0);
 });
 
+test('名单待核对与替换、新增互斥，候选目标保留到手动确认', () => {
+    const mother = makeBook([
+        { uid: 10, comment: '丽莎·敏兹', key: ['蔷薇魔女', '图书馆员'], content: '新版' },
+        { uid: 11, comment: '艾琳', key: ['图书馆员'], content: '另一个人' },
+    ]);
+    const target = makeBook([{ uid: 0, comment: '丽莎', key: ['蔷薇魔女', '图书馆员'], content: '原版' }]);
+    const names = [['丽莎'], ['图书馆员']];
+    for (const existing of [target, makeBook([])]) {
+        const match = matchRosterEntries(existing, mother, names);
+        assert.deepEqual(match.states, new Map([['10', 'review'], ['11', 'review']]));
+        assert.deepEqual([match.pairs, match.additions], [[], []]);
+        assert.deepEqual(match.reviewRows.old, new Set(Object.keys(existing.entries)));
+        assert.match(match.reviewReasons.get('10'), /母本有多个/);
+    }
+    const confirmed = matchRosterEntries(target, mother, names, { manualPairs: [{ oldId: '0', newId: '10' }] });
+    assert.deepEqual(confirmed.states, new Map([['10', 'paired']]));
+    assert.deepEqual(confirmed.review, []);
+});
+
+test('名单区分明确的作品标签和合写边界，短名关键词不抢占真实姓名', () => {
+    const row = (uid, comment, key) => ({ uid, comment, key, content: String(uid) });
+    const mother = makeBook([
+        row(10, '丽莎·敏兹', ['图书管理员']),
+        row(11, '原神·同名', ['共用词']),
+        row(12, '绝区零·同名', ['共用词']),
+        row(13, '爱好', ['相同词']),
+    ]);
+    const target = makeBook([
+        row(0, '丽莎', ['图书管理员']),
+        row(1, '蒙德图书馆', ['丽莎', '图书管理员']),
+        row(2, '绝区零·同名', ['共用词']),
+        row(3, '爱，好', ['相同词']),
+    ]);
+    const match = matchRosterEntries(target, mother, [['丽莎'], ['原神·同名'], ['爱好']]);
+    assert.deepEqual(match.pairs.map(({ oldId, newId }) => [oldId, newId]), [['0', '10']]);
+    assert.deepEqual(match.additions, ['11', '13']);
+    assert.deepEqual(match.review, []);
+});
+
 test('名单批量调整母本后一次更新五项并复制四十五项', () => {
     const target = makeBook(Array.from({ length: 5 }, (_, i) => ({
         uid: i, comment: `角色${i}`, key: [], content: `旧正文${i}`,
