@@ -31,6 +31,16 @@ test('只生成被改动字段的补丁；未知字段与布尔相对调整被�
     assert.deepEqual(patch.depth, { mode: 'add', value: -2 });
 });
 
+test('设置表单拒绝空数字、非法整数和无效下拉值，允许明确填写零', () => {
+    for (const value of ['', '  ', '错字', '2.5', Infinity, null]) {
+        assert.throws(() => buildSettingsPatch([{ key: 'order', mode: 'set', value }]), /注入顺序.*整数/);
+    }
+    assert.throws(() => buildSettingsPatch([{ key: 'position', mode: 'set', value: '9' }]), /注入位置.*有效/);
+    assert.throws(() => buildSettingsPatch([{ key: 'constant', mode: 'set', value: '' }]), /常驻.*开关值/);
+    const patch = buildSettingsPatch([{ key: 'order', mode: 'set', value: '0' }, { key: 'depth', mode: '', value: '' }]);
+    assert.deepEqual(patch, { order: { mode: 'set', value: 0 } });
+});
+
 test('应用补丁只改点到的字段，标题/关键词/正文不动', () => {
     const before = entry();
     const next = applySettingsPatch(before, { order: { mode: 'set', value: 10 }, constant: { mode: 'set', value: true } });

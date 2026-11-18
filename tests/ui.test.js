@@ -37,13 +37,13 @@ function setup() {
         newBook: book([entry(10, 'Alice', 'new'), entry(11, 'Bob', 'new'), entry(12, 'Alice', 'different', { key: ['Alice extra'] }), entry(13, 'New', 'fresh')]),
         oldName: 'target', newName: 'mother', sourceKind: 'book', pairs: [],
         pairBySource: new Map(), pairByTarget: new Map(), changeCache: new Map(), incomingCache: null,
-        newSelection: new Map(), pairChecks: new Map(), unpairedOld: new Set(), unpairedNew: new Set(),
+        newSelection: new Map(), targetChecks: new Set(), pairChecks: new Map(), unpairedOld: new Set(), unpairedNew: new Set(),
         selectionCountsValid: false, selectedUpdateCount: 0, selectedEntryCount: 0, visibleCopyCount: 0,
         pageSize: { old: 25, new: 25 }, page: { old: 1, new: 1 },
         filteredRows: { old: [], new: [] }, visibleSourceSet: new Set(['10', '11', '12', '13']),
         selectedOld: null, selectedNew: null, lastSelectedSide: null,
         previewOpen: false, splitMode: 'balanced', mode: 'content',
-        scopeNames: [], scopeWorks: [], scopeWorkKeys: [], pinMatches: true, busy: false,
+        scopeNames: [], scopeGroups: [], scopeWorks: [], scopeWorkKeys: [], pinMatches: true, busy: false,
     });
     const pairButtons = {
         toggle: { disabled: false, dataset: { pairBtn: 'pair' }, textContent: '配对所选' },
@@ -285,20 +285,20 @@ test('mother settings use current, checked, scoped and all source IDs, with mirr
     const { ui, nodes } = setup();
     ui.newBook.originalData = { entries: Object.values(ui.newBook.entries).map(item => ({ id: item.uid, content: item.content, extensions: {} })) };
     ui.selectedNew = '11';
-    assert.deepEqual(ui.settingsSourceIds(), ['11']);
+    assert.deepEqual(ui.settingsIds(), ['11']);
     nodes['[data-set-scope]'].value = 'checked';
     ui.newSelection.set('10', false);
     ui.newSelection.set('11', true);
     ui.newSelection.set('13', true);
-    assert.deepEqual(ui.settingsSourceIds(), ['11', '13']);
+    assert.deepEqual(ui.settingsIds(), ['11', '13']);
     ui.scopeNames = ['Alice']; nodes['[data-set-scope]'].value = 'scope';
-    assert.deepEqual(ui.settingsSourceIds(), ['10', '12']);
-    nodes['[data-set-scope]'].value = 'all'; assert.equal(ui.settingsSourceIds().length, 4);
+    assert.deepEqual(ui.settingsIds(), ['10', '12']);
+    nodes['[data-set-scope]'].value = 'all'; assert.equal(ui.settingsIds().length, 4);
     nodes['[data-set-scope]'].value = 'checked';
     ui.collectSettingsPatch = () => ({ constant: { mode: 'set', value: true }, depth: { mode: 'set', value: 4 } });
-    await withConfirm(false, async () => { await ui.applySettingsToMother(); assert.equal(ui.service.writes.length, 0); });
+    await withConfirm(false, async () => { await ui.applySettings('new'); assert.equal(ui.service.writes.length, 0); });
     await withConfirm(true, async () => {
-        await ui.applySettingsToMother();
+        await ui.applySettings('new');
         assert.equal(ui.newBook.entries['11'].constant, true);
         assert.equal(ui.newBook.entries['11'].depth, 4);
         assert.equal(ui.newBook.entries['10'].constant, undefined);
@@ -314,12 +314,48 @@ test('sync settings only uses specified source IDs and updates target export mir
     nodes['[data-set-scope]'].value = 'checked';
     ui.newSelection.set('10', false);
     ui.newSelection.set('11', true);
-    ui.collectSettingsPatch = () => ({ depth: { mode: 'set', value: 0 } });
+    ui.settingsFields = () => [{ key: 'depth', mode: 'set', value: '' }];
     await withConfirm(true, async () => {
         await ui.syncSettingsToTarget();
         assert.equal(ui.oldBook.entries['1'].depth, 8);
         assert.equal(ui.oldBook.originalData.entries.find(item => item.id === 1).extensions.depth, 8);
         assert.equal(ui.oldBook.entries['0'].depth, undefined);
+    });
+});
+
+test('target settings use target IDs, support search and roster, and apply a relative change only to checked targets', async () => {
+    const { ui, nodes } = setup();
+    const scope = nodes['[data-set-scope]'];
+    ui.selectedOld = '2'; ui.selectedNew = '10';
+    assert.deepEqual(ui.settingsIds('old'), ['2']);
+    assert.deepEqual(ui.settingsIds('new'), ['10']);
+    scope.value = 'search';
+    assert.deepEqual(ui.settingsIds('old'), []);
+    nodes['[data-search="old"]'].value = 'Other';
+    ui.filteredRows.old = [{ id: '2', entry: ui.oldBook.entries['2'] }];
+    assert.deepEqual(ui.settingsIds('old'), ['2']);
+    nodes['[data-scope]'].value = 'Bob';
+    ui.applyScope();
+    scope.value = 'scope';
+    assert.deepEqual(ui.settingsIds('old'), ['1']);
+
+    ui.newSelection.set('10', false); ui.newSelection.set('11', true);
+    ui.targetChecks.add('2');
+    scope.value = 'checked';
+    assert.deepEqual(ui.settingsIds('old'), ['1', '2']);
+    assert.deepEqual(ui.settingsIds('new'), ['11']);
+    const mother = structuredClone(ui.newBook);
+    ui.oldBook.entries['1'].order = 100;
+    ui.oldBook.entries['2'].order = 73;
+    ui.collectSettingsPatch = () => ({ order: { mode: 'add', value: -3 } });
+    await withConfirm(true, async calls => {
+        await ui.applySettings('old');
+        assert.match(calls[0], /目标书「target」的 2 条.*\n.*1 条被搜索隐藏/);
+        assert.equal(ui.service.writes[0].name, 'target');
+        assert.equal(ui.oldBook.entries['1'].order, 97);
+        assert.equal(ui.oldBook.entries['2'].order, 70);
+        assert.equal(ui.oldBook.entries['0'].order, undefined);
+        assert.deepEqual(ui.newBook, mother);
     });
 });
 
@@ -364,7 +400,7 @@ test('renderPairControls reuses one button for pair and unpair based on selectio
     assert.equal(pairButtons.toggle.dataset.pairBtn, 'pair');
 });
 
-test('renderList pins scope matches, paginates cleanly, and keeps old unpaired rows disabled', () => {
+test('renderList pins scope matches, paginates cleanly, and shows target-only checks independently', () => {
     const { ui, nodes } = setup();
     const previousDocument = globalThis.document;
     const lists = { old: new FakeNode('ul'), new: new FakeNode('ul') };
@@ -382,10 +418,12 @@ test('renderList pins scope matches, paginates cleanly, and keeps old unpaired r
     };
     try {
         ui.scopeNames = ['Alice'];
+        ui.targetChecks.add('2');
         ui.renderList('new'); ui.renderList('old');
         assert.equal(lists.new.children[0].dataset.id, '10');
         const otherOld = lists.old.children.find(row => row.dataset.id === '2');
-        assert.equal(otherOld.children[0].children[0].disabled, true);
+        assert.equal(otherOld.children[0].children[0].disabled, false);
+        assert.equal(otherOld.children[0].children[0].checked, true);
         const bobNew = lists.new.children.find(row => row.dataset.id === '11');
         assert.equal(bobNew.children[0].children[0].disabled, false);
         ui.pageSize.new = 2;

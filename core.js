@@ -521,12 +521,21 @@ export function buildSettingsPatch(rows) {
     const patch = {};
     for (const row of rows || []) {
         const field = SETTINGS_FIELDS.find(item => item.key === row?.key);
-        if (!field || !row.mode || row.mode === 'keep') continue;
+        if (!field || !['set', 'add'].includes(row.mode)) continue;
         if (row.mode === 'add' && field.kind !== 'number') continue;
-        patch[field.key] = {
-            mode: row.mode === 'add' ? 'add' : 'set',
-            value: field.kind === 'boolean' ? row.value === true || row.value === 'true' : Number(row.value),
-        };
+        let value;
+        if (field.kind === 'boolean') {
+            if (![true, false, 'true', 'false'].includes(row.value)) throw new Error(`请选择「${field.label}」的开关值。`);
+            value = row.value === true || row.value === 'true';
+        } else {
+            const text = typeof row.value === 'number' || typeof row.value === 'string' ? String(row.value).trim() : '';
+            value = Number(text);
+            if (!text || !Number.isSafeInteger(value)) throw new Error(`请为「${field.label}」填写整数。`);
+            if (field.kind === 'enum' && !field.options.some(option => option.value === value)) {
+                throw new Error(`请选择「${field.label}」的有效值。`);
+            }
+        }
+        patch[field.key] = { mode: row.mode, value };
     }
     return patch;
 }

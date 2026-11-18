@@ -1,9 +1,10 @@
-const VERSION = '1.12.0';
+const VERSION = '1.13.0';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
+const settingsIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -26,6 +27,7 @@ export class UpdaterWindow {
         this.incomingCache = null;
         // newSelection is the one checkbox state shared by Copy, Replace, and checked-item settings.
         this.newSelection = new Map();
+        this.targetChecks = new Set();
         this.pairChecks = new Map();
         this.unpairedOld = new Set();
         this.unpairedNew = new Set();
@@ -129,21 +131,28 @@ export class UpdaterWindow {
                 <summary class="menu_button"><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>条目设置</span><span class="stwu-settings-state" data-settings-state>批量设置</span></summary>
                 <div class="stwu-tool-content stwu-settings-content">
                   <div class="stwu-set-scope">
+                    <label>操作
+                      <select class="text_pole" data-set-operation>
+                        <option value="new">修改母本</option>
+                        <option value="old">修改目标书</option>
+                        <option value="sync">从母本同步</option>
+                      </select>
+                    </label>
                     <label>作用范围
                       <select class="text_pole" data-set-scope>
-                        <option value="current">当前查看的母本条目</option>
-                        <option value="checked">当前勾选的母本条目</option>
+                        <option value="current">当前查看的条目</option>
+                        <option value="checked">当前勾选的条目</option>
+                        <option value="search">当前搜索结果</option>
                         <option value="scope">定点名单命中</option>
-                        <option value="all">母本全部条目</option>
+                        <option value="all">整本</option>
                       </select>
                     </label>
                     <span class="stwu-set-count" data-set-count></span>
                   </div>
                   <div class="stwu-set-rows" data-set-rows></div>
-                  <p class="stwu-set-hint">没改的字段不会写入；点确认才保存，不备份。</p>
+                  <p class="stwu-set-hint" data-set-hint></p>
                   <div class="stwu-set-actions">
                     <button type="button" class="menu_button" data-action="apply-settings">应用到母本</button>
-                    <button type="button" class="menu_button" data-action="sync-settings">同步设置到目标书</button>
                   </div>
                 </div>
               </details>
@@ -299,8 +308,10 @@ export class UpdaterWindow {
             if (action === 'toggle-selection') this.toggleFilteredSelection();
             if (action === 'toggle-target-selection') this.toggleFilteredSelection('old');
             if (action === 'copy-names') this.run(() => this.copySourceNames());
-            if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
-            if (action === 'sync-settings') this.run(() => this.syncSettingsToTarget());
+            if (action === 'apply-settings') this.run(() => {
+                const operation = this.find('[data-set-operation]').value;
+                return operation === 'sync' ? this.syncSettingsToTarget() : this.applySettings(operation);
+            });
         });
         for (const side of ['old', 'new']) {
             this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
@@ -321,10 +332,15 @@ export class UpdaterWindow {
             this.on(list, 'change', event => {
                 if (!event.target.matches('input[type="checkbox"]')) return;
                 const id = event.target.closest('[data-id]').dataset.id;
-                if (!this.selectionCountsValid) this.refreshSelectionCounts();
                 const pair = side === 'old' ? this.pairByTarget.get(id) : this.pairBySource.get(id);
-                const sourceId = pair?.newId ?? (side === 'new' ? id : null);
-                if (sourceId == null) return;
+                if (side === 'old' && !pair) {
+                    if (event.target.checked) this.targetChecks.add(id);
+                    else this.targetChecks.delete(id);
+                    this.renderSettingsInfo();
+                    return;
+                }
+                if (!this.selectionCountsValid) this.refreshSelectionCounts();
+                const sourceId = pair?.newId ?? id;
                 const wasSelected = this.isEntryChecked(sourceId);
                 this.newSelection.set(sourceId, event.target.checked);
                 if (pair) { pair.checked = event.target.checked; this.pairChecks.set(sourceId, event.target.checked); }
@@ -486,9 +502,15 @@ export class UpdaterWindow {
         this.message('正在读取世界书列表…');
         this.books = await this.service.list();
         if (this.oldName) {
+            const previous = this.oldBook;
             this.oldBook = null;
             if (this.books.some(x => x.name === this.oldName)) this.oldBook = await this.service.read(this.oldName);
             else this.oldName = '';
+            if (previous && this.oldBook) {
+                const unchanged = id => settingsIdentity(previous.entries[id]) === settingsIdentity(this.oldBook.entries[id]);
+                for (const id of this.targetChecks) if (!unchanged(id)) this.targetChecks.delete(id);
+                if (!unchanged(this.selectedOld)) this.selectedOld = null;
+            }
         }
         if (this.sourceKind === 'book' && this.newName) {
             this.newBook = null;
@@ -505,7 +527,8 @@ export class UpdaterWindow {
         const role = side === 'old' ? '目标书' : '母本';
         const previous = side === 'old' ? this.oldName : (this.sourceKind === 'book' ? this.newName : null);
         if (name === previous) return;
-        if (this.hasManualDecisions() && !globalThis.confirm(`更换${role}会清除当前的人工配对和勾选。确认更换？`)) { this.selectors(); return; }
+        const clearsChecks = side === 'old' && this.targetChecks.size;
+        if ((this.hasManualDecisions() || clearsChecks) && !globalThis.confirm(`更换${role}会清除当前的人工配对和${side === 'new' ? '母本勾选' : '勾选'}。确认更换？`)) { this.selectors(); return; }
         if (side === 'old') { this.oldBook = null; this.oldName = name; }
         else { this.newBook = null; this.newName = name; this.sourceKind = 'book'; }
         this.repair(true); this.render();
@@ -536,6 +559,7 @@ export class UpdaterWindow {
         this.changeCache.clear();
         this.invalidateIncoming();
         this.selectionCountsValid = false;
+        for (const id of this.targetChecks) if (!this.oldBook?.entries[id]) this.targetChecks.delete(id);
         if (resetPage) this.page.old = this.page.new = 1;
         if (!this.oldBook || !this.newBook) { this.pairs = []; this.syncPairIndex(); return; }
         const oldEntries = this.oldBook.entries, newEntries = this.newBook.entries;
@@ -637,102 +661,133 @@ export class UpdaterWindow {
             }
             control.dataset.setValue = '';
             control.disabled = true;
-            mode.addEventListener('change', () => { control.disabled = !mode.value; });
+            this.on(mode, 'change', () => this.renderSettingsInfo());
             row.append(control);
             host.append(row);
         }
-        this.find('[data-set-scope]')?.addEventListener('change', () => this.renderSettingsInfo());
+        for (const selector of ['[data-set-operation]', '[data-set-scope]']) {
+            this.on(this.find(selector), 'change', () => this.renderSettingsInfo());
+        }
     }
 
-    collectSettingsPatch() {
-        const rows = [...this.dialog.querySelectorAll('.stwu-set-row')].map(row => ({
+    settingsFields() {
+        return [...this.dialog.querySelectorAll('.stwu-set-row')].map(row => ({
             key: row.dataset.field,
             mode: row.querySelector('[data-set-mode]').value,
             value: row.querySelector('[data-set-value]').value,
         }));
-        return buildSettingsPatch(rows);
     }
 
-    settingsSourceIds() {
+    collectSettingsPatch() { return buildSettingsPatch(this.settingsFields()); }
+
+    settingsIds(side = 'new') {
         const scope = this.find('[data-set-scope]').value;
-        const all = this.newBook ? listEntries(this.newBook).map(({ id }) => id) : [];
+        const target = side === 'old';
+        const entries = (target ? this.oldBook : this.newBook)?.entries ?? {};
+        if (scope === 'current') {
+            const id = target ? this.selectedOld : this.selectedNew;
+            return entries[id] ? [id] : [];
+        }
+        if (scope === 'search') {
+            if (!this.find(`[data-search="${side}"]`).value.trim()) return [];
+            return this.filteredRows[side].map(({ id }) => id).filter(id => entries[id]);
+        }
+        const all = Object.keys(entries);
         if (scope === 'all') return all;
-        if (scope === 'scope') return this.scopeNames.length ? all.filter(id => this.inScope(id)) : [];
-        if (scope === 'current') return all.filter(id => id === this.selectedNew);
-        return all.filter(id => this.isEntryChecked(id));
+        if (scope === 'scope') {
+            if (!this.scopeNames.length) return [];
+            if (!target) return all.filter(id => this.inScope(id));
+            return this.resolvedRoster()?.pairs.map(pair => pair.oldId) ?? [];
+        }
+        return scope === 'checked' ? all.filter(id => target ? this.isTargetChecked(id) : this.isEntryChecked(id)) : [];
     }
 
-    settingsPairInScope(pair, ids = new Set(this.settingsSourceIds())) {
-        return ids.has(pair.newId);
+    settingsSyncPairs(ids) {
+        const sourceIds = new Set(ids);
+        const roster = this.find('[data-set-scope]').value === 'scope';
+        const pairs = roster ? this.resolvedRoster()?.pairs ?? [] : this.pairs;
+        return pairs.filter(pair => sourceIds.has(pair.newId));
     }
 
     renderSettingsInfo() {
         const count = this.find('[data-set-count]');
         if (!count) return;
-        const ids = new Set(this.settingsSourceIds());
-        const pairs = this.pairs.filter(pair => this.settingsPairInScope(pair, ids)).length;
-        count.textContent = `母本 ${ids.size} 条 · 可同步 ${pairs} 条`;
+        const operation = this.find('[data-set-operation]').value;
+        const sync = operation === 'sync', target = operation === 'old';
+        const ids = this.settingsIds(target ? 'old' : 'new');
+        const affected = sync ? this.settingsSyncPairs(ids).length : ids.length;
+        count.textContent = `${target ? '目标书' : '母本'} ${ids.length} 条${sync ? ` · 可同步 ${affected} 条` : ''}`;
+        const file = operation === 'new' && this.sourceKind === 'file';
+        const emptySearch = this.find('[data-set-scope]').value === 'search'
+            && !this.find(`[data-search="${target ? 'old' : 'new'}"]`).value.trim();
+        this.find('[data-set-hint]').textContent = emptySearch
+            ? `先在${target ? '目标书' : '母本'}输入搜索词。`
+            : sync
+            ? '选中要同步的字段，按母本现有值写入已配对的目标条目。'
+            : file ? '母本来自 JSON 文件。选择酒馆内的母本即可保存设置。'
+                : '只保存设为或调整的字段，确认后写入。';
+        const apply = this.find('[data-action="apply-settings"]');
+        apply.textContent = sync ? '同步设置到目标书' : target ? '应用到目标书' : '应用到母本';
+        apply.disabled = this.busy || !!this.service.requiresReload || file || !affected;
+        for (const row of this.dialog.querySelectorAll('.stwu-set-row')) {
+            row.querySelector('[data-set-value]').disabled = this.busy || sync || !row.querySelector('[data-set-mode]').value;
+        }
     }
 
-    async applySettingsToMother() {
-        if (!this.newBook) { this.message('先选择母本。', true); return; }
-        if (this.sourceKind === 'file') { this.message('当前母本是 JSON 文件。要保存设置，请选择酒馆里已有的世界书作为母本。', true); return; }
+    async applySettings(side) {
+        const target = side === 'old';
+        const [name, book, role] = target ? [this.oldName, this.oldBook, '目标书'] : [this.newName, this.newBook, '母本'];
+        if (!book) { this.message(`先选择${role}。`, true); return; }
+        if (!target && this.sourceKind === 'file') { this.message('当前母本是 JSON 文件。选择酒馆内的母本即可保存设置。', true); return; }
         const patch = this.collectSettingsPatch();
         const keys = Object.keys(patch);
         if (!keys.length) { this.message('先选一个要修改的设置字段。', true); return; }
-        const ids = this.settingsSourceIds();
+        const ids = this.settingsIds(side);
         if (!ids.length) { this.message('当前作用范围没有条目。', true); return; }
         const summary = keys.map(key => SETTINGS_FIELDS.find(field => field.key === key)?.label ?? key).join('、');
         const scope = this.find('[data-set-scope]').selectedOptions[0].textContent;
-        const visible = new Set(this.visibleSourceIds());
+        const visible = new Set(this.filteredRows[side].map(({ id }) => id));
         const hidden = ids.filter(id => !visible.has(id)).length;
-        if (!globalThis.confirm(`将修改母本“${this.newName}”的 ${ids.length} 条条目设置：${summary}。\n范围：${scope}。${hidden ? `其中 ${hidden} 条被搜索隐藏，仍参与。` : ''}\n只改设置，标题、关键词、正文都不动；不备份。确认保存？`)) return;
-        this.message('正在保存母本设置…');
-        const next = clone(this.newBook);
+        if (!globalThis.confirm(`将修改${role}「${name}」的 ${ids.length} 条设置（${summary}）。\n范围为${scope}。${hidden ? `其中 ${hidden} 条被搜索隐藏，仍参与。` : ''}\n确认保存？`)) return;
+        this.message(`正在保存${role}设置…`);
+        const next = clone(book);
         for (const id of ids) {
             const changed = applySettingsPatch(next.entries[id], patch);
             setBookEntrySettings(next, id, pickSettings(changed, keys));
         }
-        const saved = await this.service.updateDirect(this.newName, this.newBook, next);
-        this.newBook = saved.data;
-        if (this.oldName === this.newName) this.oldBook = saved.data;
+        const saved = await this.service.updateDirect(name, book, next);
+        if (target || this.sameNamedBook()) this.oldBook = saved.data;
+        if (!target || this.sameNamedBook()) this.newBook = saved.data;
         this.changeCache.clear(); this.invalidateIncoming();
         this.selectionCountsValid = false;
-        this.message(`母本已保存：${ids.length} 条设置已更新。${saved.note || ''}`);
-        this.render();
+        this.message(saved.changed === false ? saved.note : `${role}已保存：${ids.length} 条设置已更新。${saved.note || ''}`);
     }
 
     async syncSettingsToTarget() {
         if (!this.oldBook || !this.newBook) { this.message('先选择母本和目标书。', true); return; }
-        const patch = this.collectSettingsPatch();
-        const keys = Object.keys(patch);
+        const keys = this.settingsFields().filter(field => field.mode).map(field => field.key);
         if (!keys.length) { this.message('先选一个要同步的设置字段。', true); return; }
-        const sourceIds = new Set(this.settingsSourceIds());
-        const pairs = this.pairs.filter(pair => this.settingsPairInScope(pair, sourceIds));
+        const pairs = this.settingsSyncPairs(this.settingsIds());
         if (!pairs.length) { this.message('当前范围没有可同步的配对条目。', true); return; }
+        const updates = pairs.map(pair => ({ pair, values: pickSettings(this.newBook.entries[pair.newId], keys) }))
+            .filter(({ values }) => Object.keys(values).length);
+        if (!updates.length) { this.message('母本里没有对应的设置值可同步。', true); return; }
         const summary = keys.map(key => SETTINGS_FIELDS.find(field => field.key === key)?.label ?? key).join('、');
         const scope = this.find('[data-set-scope]').selectedOptions[0].textContent;
         const visible = new Set(this.visibleSourceIds());
-        const hidden = pairs.filter(pair => !visible.has(pair.newId)).length;
-        if (!globalThis.confirm(`将把母本的 ${summary} 同步到目标书“${this.oldName}”的 ${pairs.length} 条已配对条目。\n范围：${scope}。${hidden ? `其中 ${hidden} 条被搜索隐藏，仍参与。` : ''}\n只改设置，标题、关键词、正文都不动；不备份。确认保存？`)) return;
+        const hidden = updates.filter(({ pair }) => !visible.has(pair.newId)).length;
+        const missing = pairs.length - updates.length;
+        if (!globalThis.confirm(`将把母本的 ${summary} 同步到目标书「${this.oldName}」的 ${updates.length} 条配对条目。\n范围为${scope}。${hidden ? `其中 ${hidden} 条被搜索隐藏，仍参与。` : ''}${missing ? `另有 ${missing} 条缺少所选字段，已跳过。` : ''}\n确认保存？`)) return;
         this.message('正在同步设置…');
         const next = clone(this.oldBook);
-        let synced = 0;
-        for (const pair of pairs) {
-            const picked = pickSettings(this.newBook.entries[pair.newId], keys);
-            if (!Object.keys(picked).length) continue;
-            setBookEntrySettings(next, pair.oldId, picked);
-            synced++;
-        }
-        if (!synced) { this.message('母本里没有对应的设置值可同步。', true); return; }
+        for (const { pair, values } of updates) setBookEntrySettings(next, pair.oldId, values);
         const saved = await this.service.updateDirect(this.oldName, this.oldBook, next);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.invalidateIncoming();
         this.changeCache.clear();
         this.selectionCountsValid = false;
-        this.message(`已同步 ${synced} 条设置到目标书。${saved.note || ''}`);
-        this.render();
+        this.message(saved.changed === false ? saved.note : `已同步 ${updates.length} 条设置到目标书。${saved.note || ''}`);
     }
 
     inScope(id) {
@@ -784,11 +839,16 @@ export class UpdaterWindow {
     syncPairIndex() {
         this.pairBySource = new Map(this.pairs.map(pair => [pair.newId, pair]));
         this.pairByTarget = new Map(this.pairs.map(pair => [pair.oldId, pair]));
+        for (const id of this.targetChecks) if (this.pairByTarget.has(id)) this.targetChecks.delete(id);
     }
     pairForSource(id) { return this.pairBySource.get(id); }
     isEntryChecked(id) {
         if (this.newSelection.has(id)) return this.newSelection.get(id) === true;
         return !!this.pairForSource(id)?.checked;
+    }
+    isTargetChecked(id) {
+        const pair = this.pairByTarget.get(id);
+        return pair ? this.isEntryChecked(pair.newId) : this.targetChecks.has(id);
     }
     selectedSourceIds() { return Object.keys(this.newBook?.entries ?? {}).filter(id => this.isEntryChecked(id)); }
 
@@ -951,7 +1011,6 @@ export class UpdaterWindow {
     render() {
         for (const side of ['old', 'new']) this.renderList(side);
         this.renderControls();
-        this.renderSettingsInfo();
         this.renderPreview();
     }
 
@@ -1010,8 +1069,8 @@ export class UpdaterWindow {
             {
                 const label = element('label', 'stwu-entry-check');
                 const check = element('input'); check.type = 'checkbox';
-                check.checked = side === 'new' ? this.isEntryChecked(id) : !!pair && this.isEntryChecked(pair.newId);
-                check.disabled = this.busy || (side === 'old' && !pair);
+                check.checked = side === 'new' ? this.isEntryChecked(id) : this.isTargetChecked(id);
+                check.disabled = this.busy;
                 const checkLabel = side === 'old' && !pair
                     ? (reviewIds.has(id) ? '待核对目标候选' : '目标书独有条目') : '选择条目';
                 check.setAttribute('aria-label', `${checkLabel}：${title(entry)}`);
@@ -1056,16 +1115,7 @@ export class UpdaterWindow {
         }
         this.renderSelectionSummary();
         this.renderPairControls();
-        for (const side of ['old', 'new']) {
-            const pairsById = new Map(this.pairs.map(p => [side === 'old' ? p.oldId : p.newId, p]));
-            for (const li of this.dialog.querySelectorAll(`[data-list="${side}"] .stwu-entry`)) {
-                const pair = pairsById.get(li.dataset.id);
-                li.querySelector('input').disabled = this.busy || (side === 'old' && !pair);
-            }
-        }
-        for (const row of this.dialog.querySelectorAll('.stwu-set-row')) {
-            row.querySelector('[data-set-value]').disabled = this.busy || !row.querySelector('[data-set-mode]').value;
-        }
+        this.renderSettingsInfo();
         if (this.targetOperation) this.renderTargetOperation();
     }
 

@@ -121,6 +121,7 @@ test('内容相同不写入', async () => {
     const f = fixture();
     const result = await f.service.updateDirect('目标', initial, clone(initial));
     assert.equal(f.writes, 0);
+    assert.equal(result.changed, false);
     assert.match(result.note, /相同/);
 });
 

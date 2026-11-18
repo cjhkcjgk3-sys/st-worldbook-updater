@@ -196,8 +196,11 @@ try {
         await page.locator('.stwu-header h2').click();
         assert.equal(await page.locator('.stwu-scope').getAttribute('open'), null);
         await openTool(page, 'stwu-settings');
-        for (const action of ['apply-settings', 'sync-settings']) {
-            await assertOneLineButton(page.locator(`[data-action="${action}"]`));
+        const settingOperation = page.locator('[data-set-operation]');
+        const settingAction = page.locator('[data-action="apply-settings"]');
+        for (const mode of ['new', 'old', 'sync']) {
+            await settingOperation.selectOption(mode);
+            await assertOneLineButton(settingAction);
         }
         await page.locator('.stwu-header h2').click();
 
@@ -386,8 +389,7 @@ try {
         for (const id of [110, 111, 112]) assert.match(await status('new', id), /置顶 · 待核对/);
         for (const id of [10, 11, 12]) {
             assert.match(await status('old', id), /置顶 · 待核对/);
-            const reviewCheckbox = row('old', id).getByRole('checkbox', { name: /^待核对目标候选/ });
-            assert.equal(await reviewCheckbox.isDisabled(), true);
+            assert.equal(await row('old', id).getByRole('checkbox', { name: /^待核对目标候选/ }).isEnabled(), true);
         }
 
         const category = page.locator('[data-selection-category]');
@@ -596,6 +598,142 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        state.books.set('另一母本', book([entry(90, '其他母本条目', ['其他母本'], '其他正文')]));
+        state.books.set('另一目标书', book([entry(2, '同编号的其他条目', ['另一身份'], '其他正文')]));
+        const { page, ctx, errors } = await prepare(320, 568);
+        const oldSearch = page.locator('[data-search="old"]');
+        const row = (side, id) => page.locator(`[data-list="${side}"] [data-id="${id}"]`);
+        await row('old', 2).getByRole('checkbox', { name: /^待核对目标候选/ }).check();
+        await row('old', 4).getByRole('checkbox', { name: /^目标书独有条目/ }).check();
+        assert.equal(await row('old', 0).locator('input').isChecked(), true);
+        assert.equal(await row('new', 90).locator('input').isChecked(), true);
+        assert.equal(await row('new', 91).locator('input').isChecked(), false);
+        assert.equal(await row('new', 94).locator('input').isChecked(), false);
+        assert.equal(await page.locator('[data-action="copy"]').isDisabled(), true);
+        assert.equal(await page.locator('[data-action="replace"]').textContent(), '替换所选 (1)');
+        await oldSearch.fill('角色甲');
+        assert.equal(await row('old', 2).count(), 0);
+        assert.equal(await row('old', 4).count(), 0);
+
+        await openTool(page, 'stwu-settings');
+        const operation = page.locator('[data-set-operation]');
+        const scope = page.locator('[data-set-scope]');
+        const count = page.locator('[data-set-count]');
+        const order = page.locator('[data-field="order"]');
+        const action = page.locator('[data-action="apply-settings"]');
+        assert.equal(await operation.inputValue(), 'new');
+        await scope.selectOption('checked');
+        assert.equal(await count.textContent(), '母本 1 条');
+        await operation.selectOption('sync');
+        assert.equal(await count.textContent(), '母本 1 条 · 可同步 1 条');
+        await operation.selectOption('old');
+        await scope.selectOption('all');
+        assert.equal(await count.textContent(), '目标书 6 条');
+        await scope.selectOption('search');
+        assert.equal(await count.textContent(), '目标书 1 条');
+        await scope.selectOption('checked');
+        assert.equal(await count.textContent(), '目标书 3 条');
+        await order.locator('[data-set-mode]').selectOption('set');
+        await order.locator('[data-set-value]').fill('57');
+        let confirmation;
+        page.once('dialog', dialog => { confirmation = dialog.message(); return dialog.accept(); });
+        await action.click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('目标书已保存：3 条设置已更新。'));
+        assert.match(confirmation, /演示_目标书.*3 条/);
+        assert.match(confirmation, /2 条被搜索隐藏/);
+        assert.equal(state.writes, 1);
+        const expected = structuredClone(old);
+        for (const id of [0, 2, 4]) expected.entries[id].order = 57;
+        assert.deepEqual(state.books.get('演示_目标书'), expected);
+        assert.deepEqual(state.books.get('演示_母本'), newer);
+
+        page.once('dialog', dialog => dialog.accept());
+        await action.click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.includes('内容相同，无需写入'));
+        assert.equal(state.writes, 1);
+
+        const drawer = page.locator('.stwu-settings');
+        if (await drawer.getAttribute('open') !== null) await drawer.locator(':scope > summary').click();
+        await oldSearch.fill('');
+        await clickRow(page, 'new', '90');
+        await clickRow(page, 'old', '4');
+        await oldSearch.fill('角色甲');
+        await openTool(page, 'stwu-settings');
+        await scope.selectOption('current');
+        assert.equal(await count.textContent(), '目标书 1 条');
+        await order.locator('[data-set-mode]').selectOption('set');
+        await order.locator('[data-set-value]').fill('84');
+        page.once('dialog', dialog => dialog.accept());
+        await action.click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('目标书已保存：1 条设置已更新。'));
+        assert.equal(state.writes, 2);
+        expected.entries[4].order = 84;
+        assert.deepEqual(state.books.get('演示_目标书'), expected);
+        assert.deepEqual(state.books.get('演示_母本'), newer);
+
+        await order.locator('[data-set-value]').fill('');
+        await action.click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.includes('「注入顺序」填写整数'));
+        assert.equal(state.writes, 2);
+        await operation.selectOption('sync');
+        await scope.selectOption('checked');
+        assert.equal(await order.locator('[data-set-value]').isDisabled(), true);
+        page.once('dialog', dialog => dialog.accept());
+        await action.click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已同步 1 条设置到目标书。'));
+        expected.entries[0].order = newer.entries[90].order;
+        assert.equal(state.writes, 3);
+        assert.deepEqual(state.books.get('演示_目标书'), expected);
+        assert.deepEqual(state.books.get('演示_母本'), newer);
+
+        await openTool(page, 'stwu-scope');
+        const roster = page.locator('[data-scope]');
+        await roster.fill('角色甲\n共同标题');
+        await roster.press('Tab');
+        await openTool(page, 'stwu-settings');
+        await operation.selectOption('old');
+        await scope.selectOption('scope');
+        assert.equal(await count.textContent(), '目标书 1 条');
+
+        await oldSearch.fill('');
+        await openTool(page, 'stwu-pairbar');
+        await page.getByRole('button', { name: '交换左右', exact: true }).click();
+        assert.equal(await page.locator('.stwu-pane').first().getAttribute('data-side'), 'old');
+        assert.equal(await row('old', 2).locator('input').isChecked(), true);
+        assert.equal(await row('old', 4).locator('input').isChecked(), true);
+        const reload = async () => {
+            await page.locator('.stwu-header-actions [data-action="reload"]').click();
+            await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
+        };
+        await reload();
+        assert.equal(await row('old', 4).locator('input').isChecked(), true);
+        const edited = structuredClone(expected);
+        edited.entries[4] = entry(4, '重新使用编号的条目', ['另一人物'], '另一正文');
+        state.books.set('演示_目标书', edited);
+        await reload();
+        assert.equal(await row('old', 4).locator('input').isChecked(), false);
+        assert.equal(await row('old', 2).locator('input').isChecked(), true);
+
+        const acceptSwitch = dialog => dialog.accept();
+        page.on('dialog', acceptSwitch);
+        await page.locator('[data-book="new"]').selectOption('book:另一母本');
+        await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
+        assert.equal(await row('old', 2).locator('input').isChecked(), true);
+        await page.locator('[data-book="old"]').selectOption('book:另一目标书');
+        await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
+        assert.equal(await row('old', 2).locator('input').isChecked(), false);
+        page.off('dialog', acceptSwitch);
+        await openTool(page, 'stwu-settings');
+        await scope.selectOption('search');
+        assert.equal(await count.textContent(), '目标书 0 条');
+        assert.equal(await action.isDisabled(), true);
+        assert.equal(state.writes, 3);
+        assert.deepEqual(errors, []);
+        results.push('目标书设置按本栏勾选、搜索、当前查看及名单取值，空数字停止保存，同步用母本值，换书和重载不串选');
+        await ctx.close();
+    }
+
     // Roster preview and a single verified write.
     reset(); {
         Object.assign(state.books.get('演示_目标书').entries[0], {
@@ -615,7 +753,7 @@ try {
         const targetStatus = page.locator('[data-list="old"] [data-id="0"] .stwu-entry-status');
         assert.match(await sourceStatus.textContent(), /配对 \d+ · 有变化/);
         assert.equal(await targetStatus.textContent(), await sourceStatus.textContent());
-        assert.equal(await page.locator('[data-list="old"] [data-id="100"] input').isDisabled(), true);
+        assert.equal(await page.locator('[data-list="old"] [data-id="100"] input').isEnabled(), true);
         const previewButton = page.getByRole('button', { name: '按名单更新', exact: true });
         const dialog = page.locator('[data-roster-dialog]');
         const confirm = page.getByRole('button', { name: '确认更新', exact: true });

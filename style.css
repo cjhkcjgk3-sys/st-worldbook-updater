@@ -91,9 +91,11 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-scope-spec summary { cursor: pointer; }
 .stwu-scope-spec ol { margin: 5px 0; padding-left: 22px; }
 .stwu-scope-spec p { margin-top: 5px; }
-.stwu-set-scope { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .82em; }
-.stwu-set-scope label { display: flex; align-items: center; gap: 6px; }
-.stwu-set-count { color: var(--wu-em); font-size: .8em; }
+.stwu-set-scope { display: flex; flex-wrap: wrap; gap: 6px 8px; font-size: .82em; }
+.stwu-set-scope label { display: grid; flex: 1 1 8em; gap: 3px; min-width: 0; max-width: 100%; }
+.stwu-set-scope label + label { flex-basis: 11.5em; }
+.stwu-set-scope select { text-overflow: ellipsis; }
+.stwu-set-count { flex-basis: 100%; color: var(--wu-em); font-size: .8em; }
 .stwu-set-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 5px 10px; }
 .stwu-set-row { display: grid; grid-template-columns: 1fr 62px 1fr; align-items: center; gap: 4px; font-size: .8em; }
 .stwu-set-row .text_pole { min-height: 30px; font-size: .9em; }
