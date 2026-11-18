@@ -213,6 +213,39 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        const makeRow = (id, target, content) => entry(target ? id : 100 + id, `角色 ${id + 1}`, [`角色 ${id + 1}`], content, {
+            displayIndex: target ? 11 - id : id,
+        });
+        const target = book(Array.from({ length: 12 }, (_, id) => makeRow(id, true, '旧正文')));
+        const mother = book(Array.from({ length: 12 }, (_, id) => makeRow(id, false, [2, 9].includes(id) ? '新正文' : '旧正文')));
+        state.books.set('演示_目标书', target);
+        state.books.set('演示_母本', mother);
+        const { page, ctx, errors } = await prepare();
+        const firstIds = (side, n) => page.locator(`[data-list="${side}"] [data-id]`)
+            .evaluateAll((rows, count) => rows.slice(0, count).map(row => row.dataset.id), n);
+        assert.deepEqual(await firstIds('new', 2), ['102', '109']);
+        assert.deepEqual(await firstIds('old', 2), ['2', '9']);
+        await page.locator('[data-list="old"] [data-id="2"] input').uncheck();
+        assert.deepEqual(await firstIds('new', 2), ['109', '100']);
+        assert.deepEqual(await firstIds('old', 2), ['9', '0']);
+        await page.locator('[data-list="new"] [data-id="107"] input').check();
+        assert.deepEqual(await firstIds('new', 2), ['107', '109']);
+        assert.deepEqual(await firstIds('old', 2), ['7', '9']);
+        assert.equal(await page.locator('[data-list="old"] [data-id="7"] input').isChecked(), true);
+        await openTool(page, 'stwu-scope');
+        await page.locator('[data-scope-pin]').uncheck();
+        assert.deepEqual(await firstIds('new', 2), ['100', '101']);
+        assert.deepEqual(await firstIds('old', 2), ['11', '10']);
+        await page.locator('[data-scope-pin]').check();
+        assert.deepEqual(await firstIds('new', 2), ['107', '109']);
+        assert.deepEqual(await firstIds('old', 2), ['7', '9']);
+        assert.equal(state.writes, 0);
+        assert.deepEqual(errors, []);
+        results.push('配对 3、10 勾选后两栏相邻，改单项勾选和切换置顶即时重排且不写入');
+        await ctx.close();
+    }
+
     // 150-entry pagination & page jump
     reset(); {
         const manyBook = book(Array.from({ length: 150 }, (_, i) => entry(i, `角色 ${String(i + 1).padStart(3, '0')}`, [`角色 ${i + 1}`], `正文 ${i + 1}`)));
