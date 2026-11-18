@@ -421,6 +421,7 @@ try {
         Object.assign(state.books.get('演示_目标书').entries[0], {
             comment: '琴', key: ['琴', '琴团长', '琴團長', '代理团长'],
         });
+        state.books.get('演示_目标书').entries[100] = entry(100, '琴', ['琴', '弦乐器'], '乐器条目');
         Object.assign(state.books.get('演示_母本').entries[90], {
             comment: '琴·古恩希尔德', key: ['琴·古恩希尔德', '蒲公英骑士', '狮牙骑士', '代理团长'],
         });
@@ -434,6 +435,7 @@ try {
         const targetStatus = page.locator('[data-list="old"] [data-id="0"] .stwu-entry-status');
         assert.match(await sourceStatus.textContent(), /配对 \d+ · 有变化/);
         assert.equal(await targetStatus.textContent(), await sourceStatus.textContent());
+        assert.equal(await page.locator('[data-list="old"] [data-id="100"] input').isDisabled(), true);
         const previewButton = page.getByRole('button', { name: '按名单更新', exact: true });
         const dialog = page.locator('[data-roster-dialog]');
         const confirm = page.getByRole('button', { name: '确认更新', exact: true });
@@ -455,6 +457,7 @@ try {
         assert.equal(target.entries[0].comment, '琴');
         assert.equal(target.entries[0].content, newer.entries[90].content);
         assert.equal(target.entries[0].order, 100);
+        assert.equal(target.entries[100].content, '乐器条目');
         assert.equal(target.entries[1].content, old.entries[1].content);
         assert.equal(Object.values(target.entries).filter(row => row.comment === '新增条目').length, 1);
         assert.deepEqual(state.books.get('演示_母本'), motherBefore);
@@ -463,7 +466,7 @@ try {
         assert.equal(await confirm.isVisible(), false);
         assert.equal(state.writes, 1);
         assert.deepEqual(errors, []);
-        results.push('320px 名单中琴的单字简称、双栏配对、预览、写入及重复执行通过');
+        results.push('320px 用主关键词区分单字同名，琴配对、预览、写入及重复执行通过');
         await ctx.close();
     }
 
@@ -490,7 +493,7 @@ try {
     reset(); {
         const mother = state.books.get('演示_母本'), target = state.books.get('演示_目标书');
         mother.entries[90] = entry(90, '哥伦比娅·希珀塞莱妮娅', ['少女', '库塔尔', '小鸽子'], '母本少女');
-        mother.entries[91] = entry(91, '菲谢尔·冯·露弗施洛斯·那菲多特', ['断罪之皇女'], '母本菲谢尔');
+        mother.entries[91] = entry(91, '菲谢尔·冯·露弗施洛斯·那菲多特', ['菲谢尔·冯·露弗施洛斯·那菲多特', '断罪之皇女'], '母本菲谢尔');
         target.entries[0] = entry(0, '哥伦比亚', ['少女', '库塔尔'], '旧少女');
         target.entries[1] = entry(1, '菲谢尔，奥兹', ['菲谢尔、奥兹'], '旧菲谢尔');
         const { page, ctx, errors } = await prepare(390, 844, null, true);

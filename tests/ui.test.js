@@ -126,6 +126,7 @@ test('replacing changed pairs clears replaced pair check while retaining uncheck
 
 test('applyScope restricts replacement pairs to matched names without deleting unpaired entries', async () => {
     const { ui, nodes } = setup();
+    delete ui.newBook.entries['12'];
     nodes['[data-scope]'].value = 'Alice';
     ui.applyScope();
     assert.deepEqual(ui.scopeNames, ['Alice']);
@@ -138,6 +139,18 @@ test('applyScope restricts replacement pairs to matched names without deleting u
         assert.equal(ui.oldBook.entries['0'].content, 'new');
         assert.equal(bob.checked, true);
     });
+});
+
+test('名单待核对的单字简称不会被整本回退自动勾选', () => {
+    const { ui, nodes } = setup();
+    ui.oldBook = book([entry(1, '琴·古恩希尔德', '旧', { key: [] })]);
+    ui.newBook = book([entry(10, '琴·古恩希尔德', '新', { key: [] })]);
+    ui.repair();
+    assert.equal(ui.pairs.length, 1);
+    nodes['[data-scope]'].value = '琴';
+    ui.applyScope();
+    assert.equal(ui.pairs.length, 0);
+    assert.equal(ui.incoming().reviewRows.new.has('10'), true);
 });
 
 test('rematching and changing scope preserve manual pairing, unpairing and explicit unchecked choices', () => {

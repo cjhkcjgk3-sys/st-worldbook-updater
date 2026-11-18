@@ -1,4 +1,4 @@
-const VERSION = '1.10.5';
+const VERSION = '1.10.6';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -509,7 +509,9 @@ export class UpdaterWindow {
             : null;
         this.rosterReviewRows = roster?.reviewRows ?? null;
         const scoped = this.scopeNames.length ? autoMatchScoped(this.oldBook, this.newBook, this.scopeNames, workKeysOf(this.scopeWorks)) : [];
-        const proposals = [...(roster?.pairs ?? []), ...scoped, ...autoMatch(this.oldBook, this.newBook)];
+        const legacy = [...scoped, ...autoMatch(this.oldBook, this.newBook)]
+            .filter(pair => !roster?.reviewRows.new.has(pair.newId));
+        const proposals = [...(roster?.pairs ?? []), ...legacy];
         const pairs = [...manual];
         for (const pair of proposals) {
             if (usedOld.has(pair.oldId) || usedNew.has(pair.newId) || this.unpairedOld.has(pair.oldId) || this.unpairedNew.has(pair.newId)) continue;
