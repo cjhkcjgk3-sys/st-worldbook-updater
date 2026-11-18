@@ -1,7 +1,9 @@
-const VERSION = '1.10.8';
+const VERSION = '1.11.0';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+
+const retainedPair = pair => ['手动配对', '本次新增', '复制时保留的配对'].includes(pair.reason);
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -166,7 +168,7 @@ export class UpdaterWindow {
                 <section class="stwu-pane" data-side="old" aria-label="目标书">
                   <div class="stwu-pane-head"><h3>目标书</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="old" title="跳到目标书待核对条目" hidden></button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择目标书" data-book="old"></select>
-                  <div class="stwu-source-line">目标书独有条目会保留</div>
+                  <div class="stwu-source-line"><button type="button" class="menu_button" data-action="toggle-target-selection" title="按目标书当前搜索结果批量勾选已配对条目，目标书独有条目会保留" aria-pressed="false">勾选已配对</button></div>
                   <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" title="单字按完整标题或关键词搜索" autocomplete="off">
                   <ol class="stwu-list" data-list="old" aria-label="目标书条目"></ol>
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="old" aria-label="目标书每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="old:-1" aria-label="目标书上一页">‹</button><span data-page-status="old">0 / 0</span><button type="button" class="menu_button" data-page-step="old:1" aria-label="目标书下一页">›</button></div>
@@ -268,6 +270,7 @@ export class UpdaterWindow {
                 this.run(() => this.saveRoster());
             }
             if (action === 'toggle-selection') this.toggleFilteredSelection();
+            if (action === 'toggle-target-selection') this.toggleFilteredSelection('old');
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
             if (action === 'sync-settings') this.run(() => this.syncSettingsToTarget());
@@ -496,7 +499,7 @@ export class UpdaterWindow {
         this.unpairedOld.clear(); this.unpairedNew.clear();
     }
 
-    repair(reset = false) {
+    repair(reset = false, resetPage = true) {
         if (reset) {
             this.resetPairDecisions();
             this.selectedOld = this.selectedNew = null;
@@ -505,24 +508,23 @@ export class UpdaterWindow {
         this.changeCache.clear();
         this.invalidateIncoming();
         this.selectionCountsValid = false;
-        this.page.old = this.page.new = 1;
+        if (resetPage) this.page.old = this.page.new = 1;
         if (!this.oldBook || !this.newBook) { this.pairs = []; this.syncPairIndex(); return; }
         const oldEntries = this.oldBook.entries, newEntries = this.newBook.entries;
         const previous = new Map(this.pairs.map(pair => [pair.newId, pair]));
-        const manual = this.pairs.filter(pair => (pair.reason === '手动配对' || pair.reason === '本次新增') && oldEntries[pair.oldId] && newEntries[pair.newId]);
+        const manual = this.pairs.filter(pair => retainedPair(pair) && oldEntries[pair.oldId] && newEntries[pair.newId]);
         const usedOld = new Set(manual.map(pair => pair.oldId)), usedNew = new Set(manual.map(pair => pair.newId));
-        const roster = this.scopeGroups?.length
-            ? matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions(manual))
-            : null;
-        this.rosterReviewRows = roster?.reviewRows ?? null;
-        const scoped = this.scopeNames.length ? autoMatchScoped(this.oldBook, this.newBook, this.scopeNames, workKeysOf(this.scopeWorks)) : [];
-        const legacy = [...scoped, ...autoMatch(this.oldBook, this.newBook)]
-            .filter(pair => !roster?.reviewRows.new.has(pair.newId));
-        const proposals = [...(roster?.pairs ?? []), ...legacy];
+        const roster = this.resolvedRoster(manual);
+        const outsideRoster = autoMatch(this.oldBook, this.newBook, this.scopeWorkKeys)
+            .filter(pair => !roster?.states.has(pair.newId) && !roster?.reviewRows.old.has(pair.oldId));
+        const proposals = [...(roster?.pairs ?? []), ...outsideRoster];
         const pairs = [...manual];
-        for (const pair of proposals) {
+        for (const proposal of proposals) {
+            const pair = { ...proposal };
             if (usedOld.has(pair.oldId) || usedNew.has(pair.newId) || this.unpairedOld.has(pair.oldId) || this.unpairedNew.has(pair.newId)) continue;
-            pair.checked = this.pairChecks.get(pair.newId) ?? this.newSelection.get(pair.newId) ?? previous.get(pair.newId)?.checked ?? (this.inScope(pair.newId) && this.changed(pair));
+            const prior = previous.get(pair.newId);
+            pair.checked = this.pairChecks.get(pair.newId) ?? this.newSelection.get(pair.newId)
+                ?? (prior?.oldId === pair.oldId ? prior.checked : undefined) ?? (this.inScope(pair.newId) && this.changed(pair));
             usedOld.add(pair.oldId); usedNew.add(pair.newId); pairs.push(pair);
         }
         this.pairs = pairs;
@@ -707,27 +709,33 @@ export class UpdaterWindow {
 
     inScope(id) {
         if (!this.scopeNames.length) return true;
+        const roster = this.resolvedRoster();
+        if (roster) return roster.states.has(id);
         return !!this.newBook?.entries?.[id] && !!scopeMatch(this.newBook.entries[id], this.scopeNames, this.scopeWorkKeys ?? workKeysOf(this.scopeWorks));
     }
 
     scopeText() {
         if (!this.scopeNames.length || !this.newBook) return '';
-        const hit = Object.values(this.newBook.entries).filter(entry => scopeMatch(entry, this.scopeNames, this.scopeWorkKeys)).length;
+        const hit = this.resolvedRoster()?.states.size
+            ?? Object.values(this.newBook.entries).filter(entry => scopeMatch(entry, this.scopeNames, this.scopeWorkKeys)).length;
         return `母本命中 ${hit} 条。打开「按名单更新」查看处理结果。`;
     }
 
-    invalidateIncoming() { this.incomingCache = null; this.rosterReviewRows = null; }
+    resolvedRoster(manualPairs) {
+        if (!this.oldBook || !this.newBook || !this.scopeGroups?.length) return null;
+        return this.rosterMatch ??= matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions(manualPairs));
+    }
+
+    invalidateIncoming() { this.incomingCache = null; this.rosterMatch = null; }
+
     incoming() {
+        const roster = this.resolvedRoster();
+        if (roster) return roster;
         const reviewRows = { new: new Set(), old: new Set() };
         const reviewReasons = new Map();
         if (!this.oldBook || !this.newBook) return { states: new Map(), reviewRows, reviewReasons };
         if (this.incomingCache) return this.incomingCache;
-        const scoped = this.scopeGroups?.length;
-        const states = classifyIncoming(this.oldBook, this.newBook, this.pairs, scoped ? undefined : reviewRows.old, reviewReasons);
-        if (scoped) {
-            this.rosterReviewRows ??= matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions()).reviewRows;
-            return this.incomingCache = { states, reviewRows: this.rosterReviewRows, reviewReasons: new Map() };
-        }
+        const states = classifyIncoming(this.oldBook, this.newBook, this.pairs, reviewRows.old, reviewReasons, this.scopeWorkKeys);
         for (const [id, state] of states) if (state === 'review') reviewRows.new.add(id);
         return this.incomingCache = { states, reviewRows, reviewReasons };
     }
@@ -770,28 +778,33 @@ export class UpdaterWindow {
         }
     }
 
-    bulkSelectionRows(category) {
+    bulkSelectionIds(category, side) {
+        if (side === 'old') {
+            return this.filteredRows.old.map(({ id }) => this.pairByTarget.get(id))
+                .filter(pair => pair && this.inScope(pair.newId)).map(pair => pair.newId);
+        }
         const { states, reviewRows } = this.incoming();
         return this.filteredRows.new.filter(({ id }) => {
+            if (!this.inScope(id)) return false;
             if (reviewRows.new.has(id)) return category === 'review';
             if (this.pairForSource(id)) return category === 'paired';
-            return category === 'new' && states.get(id) === 'new' && this.inScope(id);
-        });
+            return category === 'new' && states.get(id) === 'new';
+        }).map(({ id }) => id);
     }
 
-    toggleFilteredSelection() {
-        const category = this.find('[data-selection-category]');
-        const rows = this.bulkSelectionRows(category.value);
-        if (!rows.length) return;
-        const select = !rows.every(({ id }) => this.isEntryChecked(id));
-        for (const { id } of rows) {
+    toggleFilteredSelection(side = 'new') {
+        const category = side === 'new' ? this.find('[data-selection-category]') : null;
+        const ids = this.bulkSelectionIds(category?.value, side);
+        if (!ids.length) return;
+        const select = !ids.every(id => this.isEntryChecked(id));
+        for (const id of ids) {
             this.newSelection.set(id, select);
             const pair = this.pairForSource(id);
             if (pair) { pair.checked = select; this.pairChecks.set(id, select); }
         }
         this.selectionCountsValid = false;
-        const label = category.selectedOptions[0].textContent;
-        this.message(`母本当前搜索结果：${select ? '已勾选' : '已取消勾选'} ${rows.length} 条「${label}」。`);
+        const label = category?.selectedOptions[0].textContent ?? '已配对';
+        this.message(`${side === 'new' ? '母本' : '目标书'}当前搜索结果：${select ? '已勾选' : '已取消勾选'} ${ids.length} 条「${label}」。`);
         this.render();
     }
 
@@ -845,6 +858,11 @@ export class UpdaterWindow {
             }
             const location = targetIndex < 0 ? '配对的对侧条目不在当前搜索结果中。' : counterpartRow ? '' : `配对的对侧条目位于第 ${Math.floor(targetIndex / this.pageSize[otherSide]) + 1} 页。`;
             this.message(`现有配对依据：${pair.reason}。${selectedCounterpart === counterpart ? (this.changed(pair) ? '有变化，正文已在下方显示。' : '当前替换范围内没有变化。') : '两侧选中的条目不同于现有配对，可手动重新配对。'}${location}`);
+        } else {
+            const { reviewRows, reviewReasons } = this.incoming();
+            if (reviewRows[side].has(id)) {
+                this.message(side === 'new' ? reviewReasons.get(id) : '这是待核对的目标候选。可选择母本条目后手动配对。');
+            }
         }
     }
 
@@ -852,7 +870,7 @@ export class UpdaterWindow {
         try {
             if (!this.selectedOld || !this.selectedNew) return;
             const displaced = this.pairs.filter(pair => (pair.oldId === this.selectedOld || pair.newId === this.selectedNew) && !(pair.oldId === this.selectedOld && pair.newId === this.selectedNew));
-            const manualConflicts = displaced.filter(pair => pair.reason === '手动配对' || pair.reason === '本次新增');
+            const manualConflicts = displaced.filter(retainedPair);
             if (manualConflicts.length && !globalThis.confirm(`新的手动配对将解除 ${manualConflicts.length} 组之前手动决定的配对。确认继续？`)) return;
             const remaining = this.pairs.filter(pair => pair.oldId !== this.selectedOld && pair.newId !== this.selectedNew);
             this.pairs = pairManually(remaining, this.selectedOld, this.selectedNew);
@@ -863,11 +881,13 @@ export class UpdaterWindow {
                 if (!this.newSelection.has(pair.newId)) this.newSelection.set(pair.newId, pair.checked);
             }
             this.unpairedOld.delete(this.selectedOld); this.unpairedNew.delete(this.selectedNew);
+            this.invalidateIncoming();
             const selected = this.inScope(this.selectedNew);
             const pair = this.pairForSource(this.selectedNew);
             if (pair) pair.checked = selected;
             this.pairChecks.set(this.selectedNew, selected);
-            this.newSelection.set(this.selectedNew, selected); this.invalidateIncoming(); this.selectionCountsValid = false;
+            this.newSelection.set(this.selectedNew, selected); this.selectionCountsValid = false;
+            if (this.scopeGroups?.length) this.repair(false, false);
             const changed = displaced.length ? `已解除 ${displaced.length} 组冲突配对。` : '';
             this.message((this.inScope(this.selectedNew) ? '已手动配对，正文已在下方并排显示。' : '已手动配对；此条在名单外，不参与当前批量写入。') + changed); this.render();
         } catch (error) { this.message(error.message, true); }
@@ -881,7 +901,9 @@ export class UpdaterWindow {
         }
         this.pairs = this.pairs.filter(p => !removed.includes(p));
         this.syncPairIndex();
-        this.invalidateIncoming(); this.selectionCountsValid = false; this.message('已解除所选配对；重新自动匹配时会保留此决定。'); this.render();
+        this.invalidateIncoming(); this.selectionCountsValid = false;
+        if (this.scopeGroups?.length) this.repair(false, false);
+        this.message('已解除所选配对；重新自动匹配时会保留此决定。'); this.render();
     }
 
     unpairAll() {
@@ -927,7 +949,8 @@ export class UpdaterWindow {
             const sourceRows = side === 'new' ? rows : listEntries(this.newBook);
             const scopedIds = this.scopeNames.length ? sourceRows.filter(({ id }) => this.inScope(id)).map(({ id }) => id) : [];
             const reviewOrder = rows.filter(({ id }) => reviewIds.has(id)).map(({ id }) => id);
-            const block = pinBlock(sourceRows, this.pairs, side, scopedIds, pair => this.isEntryChecked(pair.newId), reviewOrder);
+            const scopedPairs = this.scopeNames.length ? this.pairs.filter(pair => this.inScope(pair.newId)) : this.pairs;
+            const block = pinBlock(sourceRows, scopedPairs, side, scopedIds, pair => this.isEntryChecked(pair.newId), reviewOrder);
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);
         }
@@ -956,7 +979,9 @@ export class UpdaterWindow {
                 const check = element('input'); check.type = 'checkbox';
                 check.checked = side === 'new' ? this.isEntryChecked(id) : !!pair && this.isEntryChecked(pair.newId);
                 check.disabled = this.busy || (side === 'old' && !pair);
-                check.setAttribute('aria-label', `${side === 'old' && !pair ? '目标书独有条目，无法勾选' : '选择条目'}：${title(entry)}`);
+                const checkLabel = side === 'old' && !pair
+                    ? (reviewIds.has(id) ? '待核对目标候选' : '目标书独有条目') : '选择条目';
+                check.setAttribute('aria-label', `${checkLabel}：${title(entry)}`);
                 label.append(check); li.append(label);
             }
             const button = element('button', 'menu_button stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
@@ -973,6 +998,7 @@ export class UpdaterWindow {
             const reason = side === 'new' ? reviewReasons.get(id) : '';
             const label = needsReview ? ['待核对', reason, pair ? pairing : ''].filter(Boolean).join(' · ') : pairing;
             const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + label);
+            if (reason) button.title = reason;
             status.classList.toggle('stwu-paired', !!pair); button.append(status);
             li.append(button); fragment.append(li); rowElements.set(String(id), li);
         }
@@ -1012,12 +1038,15 @@ export class UpdaterWindow {
 
     renderBulkSelection() {
         const category = this.find('[data-selection-category]');
-        const toggle = this.find('[data-action="toggle-selection"]');
-        const rows = this.bulkSelectionRows(category.value);
-        const allSelected = rows.length > 0 && rows.every(({ id }) => this.isEntryChecked(id));
-        toggle.textContent = rows.length ? `${allSelected ? '取消勾选' : '勾选'} ${rows.length} 条` : '批量勾选';
-        toggle.setAttribute('aria-pressed', String(allSelected));
-        toggle.disabled = this.busy || !rows.length;
+        for (const [side, action] of [['new', 'toggle-selection'], ['old', 'toggle-target-selection']]) {
+            const toggle = this.find(`[data-action="${action}"]`);
+            const ids = this.bulkSelectionIds(category.value, side);
+            const allSelected = ids.length > 0 && ids.every(id => this.isEntryChecked(id));
+            const verb = allSelected ? '取消勾选' : '勾选';
+            toggle.textContent = ids.length ? `${verb} ${ids.length} 条` : side === 'old' ? '勾选已配对' : '批量勾选';
+            toggle.setAttribute('aria-pressed', String(allSelected));
+            toggle.disabled = this.busy || !ids.length;
+        }
     }
 
     renderSelectionSummary() {
@@ -1131,12 +1160,12 @@ export class UpdaterWindow {
         const hidden = selectedIds.length - additions.length;
         if (!additions.length) { this.message('母本当前搜索结果里没有已勾选的条目。'); return; }
         const selected = new Set(additions);
-        const overridden = this.pairs.filter(pair => selected.has(pair.newId));
-        const pairs = this.pairs.filter(pair => !selected.has(pair.newId)).map(pair => ({ ...pair, checked: false }));
+        const existing = new Set(this.pairs.filter(pair => selected.has(pair.newId)).map(pair => pair.newId));
+        const pairs = this.pairs.map(pair => ({ ...pair, checked: false }));
         const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode, { merge: true, additions, forceAdditions: additions });
         const names = additions.slice(0, 12).map(id => `- ${title(this.newBook.entries[id])}`).join('\n');
         const more = additions.length > 12 ? `\n- 另有 ${additions.length - 12} 条` : '';
-        const conflicts = overridden.length ? `\n其中 ${overridden.length} 条已有配对：本次会保留目标书中原已配对的条目，复制成功后改为配对新副本。` : '';
+        const conflicts = existing.size ? `\n其中 ${existing.size} 条已有配对，复制后继续沿用原配对。` : '';
         const hiddenNote = hidden ? `\n另有 ${hidden} 条手工勾选被搜索隐藏，本次不复制。` : '';
         if (!globalThis.confirm(`将从母本「${this.newName}」向目标书「${this.oldName}」复制以下 ${result.added} 条完整条目：\n${names}${more}${conflicts}${hiddenNote}\n复制不受定点名单限制；即使已有相同副本也会再次复制。确认继续？`)) return;
         this.message('正在向目标书复制条目并核验…');
@@ -1144,7 +1173,12 @@ export class UpdaterWindow {
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.changeCache.clear();
-        this.pairs = [...this.pairs.filter(pair => !selected.has(pair.newId)), ...result.addedPairs];
+        this.pairs = [
+            ...this.pairs.map(pair => existing.has(pair.newId)
+                ? { ...pair, checked: false, reason: retainedPair(pair) ? pair.reason : '复制时保留的配对' }
+                : pair),
+            ...result.addedPairs.filter(pair => !existing.has(pair.newId)),
+        ];
         this.syncPairIndex();
         for (const pair of result.addedPairs) {
             this.newSelection.set(pair.newId, false);
@@ -1155,7 +1189,7 @@ export class UpdaterWindow {
         this.message(`已核验：复制 ${result.added} 条。${hidden ? `搜索隐藏的 ${hidden} 条仍保留勾选，未复制。` : ''}${saved.note || ''}`);
     }
 
-    rosterPairingOptions(manualPairs = this.pairs.filter(pair => pair.reason === '手动配对' || pair.reason === '本次新增')) {
+    rosterPairingOptions(manualPairs = this.pairs.filter(retainedPair)) {
         return {
             workKeys: this.scopeWorkKeys,
             manualPairs,
@@ -1165,10 +1199,11 @@ export class UpdaterWindow {
     }
 
     previewRoster() {
-        const { groups } = parseNameList(this.find('[data-scope]').value, { includeGroups: true });
-        if (!groups.length || !this.oldBook || !this.newBook) return;
-        const plan = buildRosterUpdate(this.oldBook, this.newBook, groups, this.mode, this.rosterPairingOptions());
-        this.rosterPreview = { plan, before: this.oldBook, target: this.oldName };
+        this.applyScope();
+        const roster = this.resolvedRoster();
+        if (!roster) return;
+        const plan = buildResolvedRosterUpdate(this.oldBook, this.newBook, roster, this.mode, this.scopeWorkKeys);
+        this.rosterPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName };
         const sections = [
             ['替换', plan.replace], ['复制', plan.copy], ['无变化', plan.unchanged],
             ['待核对', plan.review], ['母本未找到', plan.missing],
@@ -1188,8 +1223,8 @@ export class UpdaterWindow {
         const preview = this.rosterPreview;
         this.rosterPreview = null;
         if (!preview) return;
-        if (preview.target !== this.oldName || preview.before !== this.oldBook) {
-            throw new Error('目标书在预览后已变化，请重新预览。');
+        if (preview.target !== this.oldName || preview.before !== this.oldBook || preview.mother !== this.newBook) {
+            throw new Error('世界书在预览后已变化，请重新预览。');
         }
         const { plan } = preview;
         const { result } = plan;

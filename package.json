@@ -1,7 +1,10 @@
 {
   "name": "st-worldbook-updater",
   "private": true,
-  "version": "1.10.8",
+  "version": "1.11.0",
   "type": "module",
-  "scripts": { "test": "node --test tests/*.test.js" }
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:regression": "npm test && node tests/browser-smoke.mjs"
+  }
 }

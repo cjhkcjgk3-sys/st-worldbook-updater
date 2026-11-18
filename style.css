@@ -77,9 +77,9 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-tool[open] > summary { border-color: var(--wu-quote); color: var(--wu-text); }
 .stwu-tool-content { position: absolute; z-index: 20; top: calc(100% + 5px); left: 8px; right: 8px; display: flex; width: auto; max-width: 680px; max-height: min(68dvh, 640px); margin: 0 auto; flex-direction: column; gap: 8px; overflow: auto; padding: 10px; border: 1px solid var(--wu-border); border-radius: 9px; background: var(--wu-bg); box-shadow: 0 4px 18px var(--black70a,rgba(0,0,0,.5)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .stwu-scope-state, .stwu-settings-state { margin-left: auto; color: var(--wu-em); font-size: .82em; }
+.stwu :is(.stwu-pair-actions, .stwu-scope-actions, .stwu-set-actions, .stwu-selection-bar, .stwu-bottom, .stwu-roster-actions) > .menu_button { flex: 0 0 auto; width: auto; white-space: nowrap; }
 .stwu-pair-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .stwu-pair-actions .menu_button { min-height: 34px; padding: 4px 10px; font-size: .84em; }
-.stwu-pair-actions .menu_button, .stwu-scope-actions .menu_button { width: auto; white-space: nowrap; }
 .stwu-pairhint { color: var(--wu-em); font-size: .78em; }
 .stwu-scope-content > label { color: var(--wu-em); font-size: .78em; }
 .stwu-scope textarea { min-height: 72px; max-height: 24dvh; }
@@ -103,7 +103,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
 
 .stwu-selection-bar { z-index: 2; display: flex; flex: 0 0 auto; min-height: 42px; align-items: center; flex-wrap: wrap; gap: 10px; padding: 3px 10px 5px; border-bottom: 1px solid var(--wu-border); }
 .stwu .stwu-selection-bar > select.text_pole { width: auto; flex: 0 0 auto; min-height: 34px; }
-.stwu-selection-bar > button { flex: 0 0 auto; width: auto; min-height: 34px; white-space: nowrap; }
+.stwu-selection-bar > button { min-height: 34px; }
 .stwu-selection-bar > .stwu-selection-compact { flex: 1 0 auto; }
 .stwu-selection-bar > .stwu-pairhint { min-width: 0; }
 .stwu-workspace { position: relative; z-index: 1; display: flex; flex: 0 0 auto; min-width: 0; flex-direction: column; gap: 0; overflow: visible; }
@@ -127,7 +127,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-count { color: var(--wu-em); font-size: .78em; white-space: nowrap; }
 .stwu .stwu-review-jump { width: auto; min-height: 24px; padding: 1px 4px; color: var(--wu-quote); font-size: .74em; white-space: nowrap; }
 .stwu-source-line { display: flex; flex: 0 0 auto; min-height: 36px; align-items: center; color: var(--wu-em); font-size: .78em; }
-.stwu-source-line button { width: 100%; }
+.stwu-source-line > button.menu_button { width: 100%; white-space: nowrap; }
 .stwu-list { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0; list-style: none; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
 .stwu-entry { display: flex; align-items: stretch; margin: 0 0 3px; overflow: hidden; background: var(--black30a, rgba(0,0,0,.3)); }
 .stwu-entry.wi-card-entry { padding: 0 4px; border-color: var(--wu-border); border-radius: 7px; }
@@ -168,14 +168,13 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-selection { flex: 1 1 auto; min-width: 0; color: var(--wu-em); text-align: right; font-size: .78em; white-space: nowrap; }
 .stwu-selection-compact { display: none; }
 .stwu .stwu-primary { border-color: var(--wu-quote); font-weight: 600; }
-.stwu-bottom button { flex: 0 0 auto; min-width: 80px; white-space: nowrap; }
+.stwu-bottom button { min-width: 80px; }
 .stwu-roster-dialog { width: min(520px, calc(100vw - 32px)); max-height: 78dvh; padding: 14px; color: var(--wu-text); background: var(--wu-bg); border: 1px solid var(--wu-border); border-radius: 8px; }
 .stwu-roster-dialog[open] { display: flex; flex-direction: column; gap: 8px; }
 .stwu-roster-dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .stwu-roster-dialog [data-roster-summary] { white-space: pre-line; overflow-wrap: anywhere; }
 .stwu .stwu-roster-report { min-height: 0; overflow: auto; padding: 6px 8px; border-block: 1px solid var(--wu-border); }
-.stwu-roster-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.stwu-roster-actions .menu_button { width: auto; white-space: nowrap; }
+.stwu-roster-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 
 @media (max-width: 680px) {
   dialog.stwu-dialog.popup { width: calc(100vw - 16px); height: clamp(320px, calc(var(--wu-vh,100dvh) - 16px), 100dvh); max-width: calc(100vw - 16px); max-height: calc(var(--wu-vh,100dvh) - 16px); padding: 4px 7px; }
@@ -203,7 +202,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
   .stwu .stwu-review-jump { font-size: .66em; }
   .stwu .text_pole { min-height: 34px; font-size: max(14px,var(--mainFontSize,15px)); }
   .stwu-source-line { min-height: 32px; font-size: .7em; }
-  .stwu-source-line .menu_button { min-height: 30px; padding: 3px 5px; font-size: .72em; }
+  .stwu-source-line .menu_button { min-height: 30px; padding: 3px 5px; font-size: max(11px, .9em); }
   .stwu-entry { margin-bottom: 2px; }
   .stwu-entry-check { flex-basis: 30px; min-height: 38px; }
   .stwu button.stwu-entry-button { min-height: 40px; padding: 4px; }

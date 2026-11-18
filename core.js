@@ -101,6 +101,11 @@ function hasPairEvidence(source, target, workKeys) {
 function matchEntries(oldBook, newBook, inScope, workKeys = []) {
     validateBook(oldBook); validateBook(newBook);
     const titles = new Map(), signatures = new Map();
+    function uniqueSignatureOwner(entry, owners) {
+        if (owners?.size !== 1) return null;
+        const [id] = owners;
+        return compatibleEntryWorks(entry, oldBook.entries[id], workKeys) ? id : null;
+    }
     function index(map, key, id) {
         if (!key) return;
         if (!map.has(key)) map.set(key, new Set());
@@ -130,6 +135,8 @@ function matchEntries(oldBook, newBook, inScope, workKeys = []) {
             const partialScore = (candidate, overlap) => 3 + overlap / (1 + Math.max(sourceKeys.length, group.sizes.get(candidate)));
             let oldId = null, score = 0, exactTie = false;
             if (group) {
+                const signatureOwner = uniqueSignatureOwner(entry, byKey);
+                const conflict = signatureOwner !== null && !group.ids.has(signatureOwner);
                 if (byKey) {
                     const [small, large] = group.ids.size <= byKey.size ? [group.ids, byKey] : [byKey, group.ids];
                     let count = 0;
@@ -143,10 +150,12 @@ function matchEntries(oldBook, newBook, inScope, workKeys = []) {
                 if (!score && !exactTie && group.ids.size === 1) {
                     const candidate = group.ids.values().next().value;
                     const overlap = sourceKeys.filter(key => group.keys.get(key)?.has(candidate)).length;
-                    // An exact keyword signature identifying a different entry is conflicting evidence.
                     const missingKeys = !single && (!sourceKeys.length || !group.sizes.get(candidate));
-                    if (overlap || missingKeys) { oldId = candidate; score = overlap ? partialScore(candidate, overlap) : 2; }
-                } else if (!score && !exactTie && group.ids.size > 1 && signature) {
+                    // A complete signature elsewhere conflicts with a partial link to this title.
+                    if ((!conflict && overlap) || missingKeys) {
+                        oldId = candidate; score = overlap ? partialScore(candidate, overlap) : 2;
+                    }
+                } else if (!score && !exactTie && !conflict && group.ids.size > 1 && signature) {
                     const postings = sourceKeys.map(key => group.keys.get(key)).filter(Boolean).sort((a, b) => a.size - b.size);
                     if (postings.length) {
                         // A match in every posting has the highest possible overlap; stop on a tie.
@@ -189,22 +198,24 @@ function matchEntries(oldBook, newBook, inScope, workKeys = []) {
     const remaining = Object.entries(newBook.entries).filter(([id, entry]) => entry.comment?.trim() && !usedNew.has(id) && (!inScope || inScope(entry)));
     if (!remaining.length || usedOld.size === Object.keys(oldBook.entries).length) return pairs;
 
-    const sourceTitles = rosterIndex(newBook, workKeys, { includeKeywords: false });
-    const targetTitles = rosterIndex(oldBook, workKeys, { includeKeywords: false });
+    const sourceTitles = rosterIndex(newBook, workKeys, { target: true, includeKeywords: false });
+    const targetTitles = rosterIndex(oldBook, workKeys, { target: true, includeKeywords: false });
     for (const [newId, source] of remaining) {
         const targets = [...titleMatches(targetTitles, source.comment, workKeys)].filter(id => {
             const target = oldBook.entries[id];
-            return !singleNamePair(source, target, workKeys) || hasPairEvidence(source, target, workKeys);
+            return compatibleEntryWorks(source, target, workKeys)
+                && (!singleNamePair(source, target, workKeys) || hasPairEvidence(source, target, workKeys));
         });
         if (targets.length !== 1) continue;
         const [oldId] = targets;
         const target = oldBook.entries[oldId];
         if (usedOld.has(oldId) || !hasPairEvidence(source, target, workKeys)) continue;
-        const byKey = signatures.get(keySignature(source));
-        if (byKey && !byKey.has(oldId)) continue;
+        const signatureOwner = uniqueSignatureOwner(source, signatures.get(keySignature(source)));
+        if (signatureOwner !== null && signatureOwner !== oldId) continue;
         const sources = [...titleMatches(sourceTitles, target.comment, workKeys)].filter(id => {
             const candidate = newBook.entries[id];
-            return !singleNamePair(candidate, target, workKeys) || hasPairEvidence(candidate, target, workKeys);
+            return compatibleEntryWorks(candidate, target, workKeys)
+                && (!singleNamePair(candidate, target, workKeys) || hasPairEvidence(candidate, target, workKeys));
         });
         if (sources.length !== 1 || sources[0] !== newId) continue;
         pairs.push({ oldId, newId, checked: true, reason: '名称与主关键词一致' });
@@ -213,8 +224,8 @@ function matchEntries(oldBook, newBook, inScope, workKeys = []) {
     return pairs;
 }
 
-export function autoMatch(oldBook, newBook) {
-    return matchEntries(oldBook, newBook);
+export function autoMatch(oldBook, newBook, workKeys = []) {
+    return matchEntries(oldBook, newBook, null, workKeys);
 }
 
 export function pairManually(pairs, oldId, newId) {
@@ -251,7 +262,7 @@ function entrySignature(entry) {
     return canonical(value);
 }
 
-export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, reviewReasons) {
+export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, reviewReasons, workKeys = []) {
     const result = new Map(), paired = new Set(pairs.map(p => String(p.newId)));
     const primaryNames = new Map(), signatures = new Map();
     const add = (index, key, id) => {
@@ -262,13 +273,13 @@ export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, re
         const signature = keySignature(entry);
         if (signature) add(signatures, signature, id);
         for (const key of entry.key || []) {
-            if (corroboratingKeyword(key, []) && !/[\\^$*+?\[\]{}|/]/u.test(key)) {
-                add(primaryNames, compactName(normalizeCharacterName(key, [])), id);
+            if (corroboratingKeyword(key, workKeys) && !/[\\^$*+?\[\]{}|/]/u.test(key)) {
+                add(primaryNames, fullNameKey(key, workKeys), id);
             }
         }
     }
     const identityCounts = new Map();
-    const targetTitles = rosterIndex(oldBook, [], { target: true, includeKeywords: false });
+    const targetTitles = rosterIndex(oldBook, workKeys, { target: true, includeKeywords: false });
     for (const entry of Object.values(newBook.entries)) {
         const identity = JSON.stringify([entry.comment?.trim() || '', keySignature(entry)]);
         identityCounts.set(identity, (identityCounts.get(identity) || 0) + 1);
@@ -276,19 +287,22 @@ export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, re
     for (const [id, entry] of Object.entries(newBook.entries)) {
         if (paired.has(id)) { result.set(id, 'paired'); continue; }
         const name = entry.comment?.trim() || '', signature = keySignature(entry);
-        const targets = new Set(name ? [...titleMatches(targetTitles, name, [])].filter(targetId => {
+        const targets = new Set(name ? [...titleMatches(targetTitles, name, workKeys)].filter(targetId => {
             const target = oldBook.entries[targetId];
-            return !singleNamePair(entry, target, []) || (isSingleName(name, []) && isSingleName(target.comment, []))
-                || sharedPrimaryKeyword(entry, target, [], true);
+            return !singleNamePair(entry, target, workKeys) || (isSingleName(name, workKeys) && isSingleName(target.comment, workKeys))
+                || sharedPrimaryKeyword(entry, target, workKeys, true);
         }) : []);
-        const fullName = compactName(splitBrackets(normalizeCharacterName(name, [])).outside);
-        if (corroboratingKeyword(fullName, [])) {
+        const fullName = fullNameKey(name, workKeys);
+        if (corroboratingKeyword(fullName, workKeys)) {
             for (const targetId of primaryNames.get(fullName) || []) targets.add(targetId);
         }
-        if (entry.key?.some(key => corroboratingKeyword(key, []))) {
+        if (entry.key?.some(key => corroboratingKeyword(key, workKeys))) {
             for (const targetId of signatures.get(signature) || []) {
                 if (!name || !oldBook.entries[targetId].comment?.trim()) targets.add(targetId);
             }
+        }
+        for (const targetId of targets) {
+            if (!compatibleEntryWorks(entry, oldBook.entries[targetId], workKeys)) targets.delete(targetId);
         }
         const duplicate = identityCounts.get(JSON.stringify([name, signature])) > 1;
         const unnamed = !name && !signature;
@@ -494,7 +508,12 @@ export function setBookEntrySettings(book, id, values) {
 // 条目名常见形态：`主角:爱芮`、`角色 - 雷电将军`、`波可娜·费雷尼 (Pulchra Fellini)`，
 // 尾巴偶尔带 `〔2 楼 · 回复 211/247〕` 这类元数据，比较前都要剥掉。
 export const BUILTIN_CATEGORIES = Object.freeze(['角色', '主角', '配角', '地点', '组织', '道具', '玩法', '章节剧情', '角色内心', '剧情大纲', '文风配置']);
-const BUILTIN_WORK_PREFIXES = new Set(['原神', 'genshin', 'genshinimpact']);
+const BUILTIN_WORK_PREFIXES = new Map([
+    ['原神', '原神'], ['genshin', '原神'], ['genshinimpact', '原神'],
+    ['星穹铁道', '星穹铁道'], ['崩坏星穹铁道', '星穹铁道'], ['honkaistarrail', '星穹铁道'], ['starrail', '星穹铁道'],
+    ['绝区零', '绝区零'], ['zenlesszonezero', '绝区零'],
+    ['崩坏3', '崩坏3'], ['崩坏三', '崩坏3'], ['崩坏3rd', '崩坏3'], ['honkaiimpact3rd', '崩坏3'],
+]);
 const CHARACTER_NAME_VARIANTS = new Map([['哥伦比亚', '哥伦比娅']]);
 const OPEN_BRACKETS = '(（[［{｛【〔〖「『《〈<＜';
 const CLOSE_BRACKETS = ')）]］}｝】〕〗」』》〉>＞';
@@ -556,36 +575,40 @@ export function parseScopedName(value, workKeys = []) {
     return { role, notes, key: role + notes.join(''), work };
 }
 
+function entryPrefix(comment, workKeys) {
+    const text = String(comment ?? '').trim();
+    for (const match of text.matchAll(/ - |[:：\-—·・‧]/gu)) {
+        const left = text.slice(0, match.index).trim(), right = text.slice(match.index + match[0].length).trim();
+        if (!left || !right) continue;
+        const key = compactName(left);
+        if (match[0] === ' - ' || BUILTIN_CATEGORIES.includes(left) || BUILTIN_WORK_PREFIXES.has(key) || workKeys.includes(key)) {
+            return { key, right };
+        }
+    }
+    return null;
+}
+
 /** 生成器的条目名带前缀：`主角:爱芮`、`角色 - 雷电将军`。取回名字本身。 */
 export function splitCategoryPrefix(comment, workKeys = []) {
-    const text = String(comment ?? '').trim();
-    if (!text) return '';
-    const categories = new Set(BUILTIN_CATEGORIES);
-    const knownPrefix = left => {
-        const key = compactName(left);
-        return categories.has(left) || BUILTIN_WORK_PREFIXES.has(key) || workKeys.includes(key);
-    };
-    // 冒号前缀只在左侧是已知分类或作品名时剥离。
-    // 条目本身导出的是纯名字，所以不猜：`Re:Zero` 这类名字保持完整。
-    for (const separator of [':', '：']) {
-        const at = text.indexOf(separator);
-        if (at <= 0) continue;
-        const left = text.slice(0, at).trim(), right = text.slice(at + 1).trim();
-        if (right && knownPrefix(left)) return right;
+    return entryPrefix(comment, workKeys)?.right ?? '';
+}
+
+function explicitEntryWork(entry, workKeys) {
+    let name = entry.comment, prefix;
+    while ((prefix = entryPrefix(name, workKeys))) {
+        const work = BUILTIN_WORK_PREFIXES.get(prefix.key);
+        if (work) return work;
+        name = prefix.right;
     }
-    const spaced = text.indexOf(' - ');
-    if (spaced > 0) {
-        const right = text.slice(spaced + 3).trim();
-        if (right) return right;
-    }
-    for (const separator of ['-', '—', '·', '・']) {
-        const at = text.indexOf(separator);
-        if (at <= 0) continue;
-        const left = text.slice(0, at).trim(), right = text.slice(at + separator.length).trim();
-        if (!right) continue;
-        if (knownPrefix(left)) return right;
-    }
-    return '';
+    const { groups } = splitBrackets(name);
+    return groups.map(group => BUILTIN_WORK_PREFIXES.get(compactName(group))).find(Boolean);
+}
+
+export function compatibleEntryWorks(source, target, workKeys = []) {
+    const sourceWork = explicitEntryWork(source, workKeys);
+    if (!sourceWork) return true;
+    const targetWork = explicitEntryWork(target, workKeys);
+    return !targetWork || targetWork === sourceWork;
 }
 
 /** 供展示/复制用的条目名：去掉分类前缀和「〔2 楼 · 回复 211/247〕」这类元数据。 */
@@ -599,16 +622,16 @@ export function cleanEntryName(comment, workKeys = []) {
 }
 
 /** 一个名字的全部写法：主名 + 括号里非数字的别名段（英文名、曾用名）。 */
-function labelVariants(text) {
+function labelVariants(text, workKeys) {
     const variants = new Set();
     const { outside, groups } = splitBrackets(text);
     const main = compactName(outside);
     if (main) variants.add(main);
     for (const group of groups) {
-        if (/\d/.test(group)) continue;
+        if (/\d/.test(group) || BUILTIN_WORK_PREFIXES.has(compactName(group)) || workKeys.includes(compactName(group))) continue;
         for (const part of group.split(/[\/／|｜]+/)) {
             const key = compactName(part);
-            if (key) variants.add(key);
+            if (key && !BUILTIN_WORK_PREFIXES.has(key) && !workKeys.includes(key)) variants.add(key);
         }
     }
     return variants;
@@ -628,8 +651,10 @@ function normalizeCharacterName(name, workKeys) {
 }
 
 function exactNameKeys(name, workKeys) {
+    const compound = compoundTitleNames(name, workKeys);
+    if (compound.length) return [compoundNameKey(compound, workKeys)];
     const base = normalizeCharacterName(name, workKeys);
-    return [...labelVariants(base), parseScopedName(base, workKeys).key, compactName(name)]
+    return [...labelVariants(base, workKeys), parseScopedName(base, workKeys).key, compactName(name)]
         .filter(Boolean).map(key => CHARACTER_NAME_VARIANTS.get(key) ?? key);
 }
 
@@ -718,19 +743,18 @@ function rosterIndex(book, workKeys, { includeKeywords = true, target = false } 
     };
     for (const [id, entry] of Object.entries(book.entries)) {
         const key = includeKeywords ? (entry.key || []).filter(key => !target || corroboratingKeyword(key, workKeys)) : [];
-        const names = { comment: entry.comment, key };
+        const [primary, ...secondary] = compoundTitleNames(entry.comment, workKeys);
+        const names = { comment: primary ?? entry.comment, key };
         for (const key of entryNameCandidates(names, workKeys)) add(exact, key, id);
+        if (primary) add(exact, compoundNameKey([primary, ...secondary], workKeys), id);
         if (isSingleName(entry.comment, workKeys)) singleTitles.add(id);
-        const shortTitle = shortNameKey(entry.comment, workKeys);
+        const shortTitle = shortNameKey(names.comment, workKeys);
         if (shortTitle) add(short, shortTitle, id);
-        const [primary, ...secondary] = target ? compoundTitleNames(entry.comment, workKeys) : [];
-        if (primary) {
-            // The first name identifies the entry. Companion names only flag a possible existing entry.
-            for (const name of (includeKeywords ? [primary, ...secondary] : [primary])) {
+        if (primary && target && includeKeywords) {
+            // Companion names are candidate evidence only, never the entry's primary identity.
+            for (const name of secondary) {
                 for (const key of new Set(exactNameKeys(name, workKeys))) add(exact, key, id);
             }
-            const shortPrimary = shortNameKey(primary, workKeys);
-            if (shortPrimary) add(short, shortPrimary, id);
         }
     }
     return { exact, short, singleTitles };
@@ -752,8 +776,22 @@ function rosterHits(index, keys, shortKeys = []) {
 }
 
 function titleMatches(index, title, workKeys) {
-    const short = shortNameKey(title, workKeys);
-    return rosterHits(index, titleMatchKeys(title, workKeys), short ? [short] : []);
+    const [primary, ...secondary] = compoundTitleNames(title, workKeys);
+    const name = primary ?? title;
+    const short = shortNameKey(name, workKeys);
+    const keys = titleMatchKeys(name, workKeys);
+    if (primary) keys.push(compoundNameKey([primary, ...secondary], workKeys));
+    return rosterHits(index, keys, short ? [short] : []);
+}
+
+function compoundNameKey(names, workKeys) {
+    return JSON.stringify(names.map(name => compactName(normalizeCharacterName(name, workKeys))));
+}
+
+function fullNameKey(name, workKeys) {
+    const compound = compoundTitleNames(name, workKeys);
+    return compound.length ? compoundNameKey(compound, workKeys)
+        : compactName(splitBrackets(normalizeCharacterName(name, workKeys)).outside);
 }
 
 function titleMatchKeys(title, workKeys) {
@@ -783,23 +821,44 @@ export function matchRosterEntries(oldBook, newBook, groups, {
     const manualOwners = new Map(manualPairs.map(pair => [pair.oldId, pair.newId]));
     const entries = new Map(), review = [], missing = [];
     const reviewRows = { new: new Set(), old: new Set() };
+    const reviewReasons = new Map();
+    const allowsWork = (entry, works) => {
+        if (!works.size) return true;
+        const work = explicitEntryWork(entry, workKeys);
+        return !work || works.has(work);
+    };
     const addReview = (message, sources, targets = []) => {
         review.push(message);
-        for (const id of sources) reviewRows.new.add(id);
+        const targetIds = [...targets];
+        const examples = [...new Set(targetIds.slice(0, 2).map(id => title(oldBook.entries[id])))];
+        const reason = examples.length ? `${message} · 目标候选：${examples.join('、')}${targetIds.length > 2 ? '等' : ''}` : message;
+        for (const id of sources) {
+            reviewRows.new.add(id);
+            if (!reviewReasons.has(id)) reviewReasons.set(id, reason);
+        }
         for (const id of targets) reviewRows.old.add(id);
     };
     for (const aliases of groups) {
         const name = aliases.join(' / ');
         const keys = aliases.flatMap(alias => titleMatchKeys(alias, workKeys));
         const shortKeys = aliases.map(alias => shortNameKey(alias, workKeys)).filter(Boolean);
-        let sources = rosterHits(sourceIndex, keys, shortKeys);
+        const requestedWorks = new Set(aliases.map(comment => explicitEntryWork({ comment }, workKeys)).filter(Boolean));
+        let sources = new Set([...rosterHits(sourceIndex, keys, shortKeys)].filter(id => allowsWork(newBook.entries[id], requestedWorks)));
         if (!sources.size) { missing.push(name); continue; }
+        const queryTargets = () => [...rosterHits(targetIndex, keys, shortKeys)].filter(id => {
+            const target = oldBook.entries[id];
+            return allowsWork(target, requestedWorks)
+                && [...sources].some(sourceId => compatibleEntryWorks(newBook.entries[sourceId], target, workKeys));
+        });
         if (aliases.every(alias => isSingleName(alias, workKeys))) {
-            const targets = rosterHits(targetIndex, keys, shortKeys);
+            const targets = queryTargets();
             const corroborated = new Set([...sources].filter(id => {
                 if (overrides.has(id)) return true;
                 const source = newBook.entries[id];
-                if (targets.size) return [...targets].some(oldId => sharedPrimaryKeyword(source, oldBook.entries[oldId], workKeys, true));
+                if (targets.length) return targets.some(oldId =>
+                    compatibleEntryWorks(source, oldBook.entries[oldId], workKeys)
+                    && sharedPrimaryKeyword(source, oldBook.entries[oldId], workKeys, true)
+                );
                 const keywords = entryNameCandidates({ key: source.key }, workKeys);
                 return keys.some(key => keywords.has(key));
             }));
@@ -810,26 +869,44 @@ export function matchRosterEntries(oldBook, newBook, groups, {
             sources = corroborated;
         }
         if (sources.size > 1) {
-            addReview(`${name}（母本有多个匹配条目）`, sources, rosterHits(targetIndex, keys, shortKeys));
-            continue;
+            const manuallyResolved = [...sources].filter(id => overrides.has(id));
+            if (manuallyResolved.length === 1) sources = new Set(manuallyResolved);
+            else {
+                addReview(`${name}（母本有多个匹配条目）`, sources, queryTargets());
+                continue;
+            }
         }
         const newId = sources.values().next().value;
-        if (!entries.has(newId)) entries.set(newId, { name, keys: new Set(), shortKeys: new Set() });
-        for (const key of keys) entries.get(newId).keys.add(key);
-        for (const key of shortKeys) entries.get(newId).shortKeys.add(key);
+        if (!entries.has(newId)) entries.set(newId, { name, keys: new Set(), shortKeys: new Set(), works: new Set() });
+        const item = entries.get(newId);
+        for (const key of keys) item.keys.add(key);
+        for (const key of shortKeys) item.shortKeys.add(key);
+        for (const work of requestedWorks) item.works.add(work);
     }
 
     const matched = [], additions = [], claims = new Map();
     for (const [newId, item] of entries) {
         const source = newBook.entries[newId];
-        const sourceShort = shortNameKey(source.comment, workKeys);
+        const primaryTitle = compoundTitleNames(source.comment, workKeys)[0] ?? source.comment;
+        const sourceShort = shortNameKey(primaryTitle, workKeys);
         // Once a full name is resolved, its short form can find a bare title but never another full name.
         const shortKeys = new Set(item.shortKeys);
         if (sourceShort) shortKeys.add(sourceShort);
-        const keys = [...item.keys, ...titleMatchKeys(source.comment, workKeys)].filter(key => !shortKeys.has(key));
+        const keys = [...item.keys, ...titleMatchKeys(primaryTitle, workKeys), ...titleMatchKeys(source.comment, workKeys)]
+            .filter(key => !shortKeys.has(key));
         const namedTargets = rosterHits(targetTitles, keys, shortKeys);
-        const targets = rosterHits(targetIndex, keys, shortKeys);
+        // An inferred short name can match a target title. A keyword alone must carry an explicit name.
+        const targets = rosterHits(targetIndex, keys);
         for (const oldId of namedTargets) targets.add(oldId);
+        const eligibleTarget = id => allowsWork(oldBook.entries[id], item.works)
+            && compatibleEntryWorks(source, oldBook.entries[id], workKeys);
+        for (const id of targets) if (!eligibleTarget(id)) targets.delete(id);
+        const signature = keySignature(source);
+        const identicalKeywords = (targetSignatures.get(signature) || []).filter(eligibleTarget);
+        const keywordOwner = identicalKeywords.length === 1 ? identicalKeywords[0] : null;
+        if ([...targets].some(id => namedTargets.has(id) && hasPairEvidence(source, oldBook.entries[id], workKeys))) {
+            for (const id of targets) if (!namedTargets.has(id) && id !== keywordOwner) targets.delete(id);
+        }
         if (overrides.has(newId)) {
             targets.clear();
             targets.add(overrides.get(newId));
@@ -851,8 +928,7 @@ export function matchRosterEntries(oldBook, newBook, groups, {
         } else if (targets.size > 1) {
             addReview(`${item.name}（目标书有多个匹配条目）`, [newId], targets);
         } else if (!targets.size) {
-            const signature = keySignature(source);
-            const unnamed = (targetSignatures.get(signature) || []).filter(id => !source.comment?.trim() || !oldBook.entries[id].comment?.trim());
+            const unnamed = identicalKeywords.filter(id => !source.comment?.trim() || !oldBook.entries[id].comment?.trim());
             if (sourceSignatureCounts.get(signature) === 1 && unnamed.length
                 && source.key?.some(key => corroboratingKeyword(key, workKeys))) {
                 addReview(`${item.name}（缺少标题，主关键词完全相同）`, [newId], unnamed);
@@ -867,27 +943,49 @@ export function matchRosterEntries(oldBook, newBook, groups, {
                 addReview(`${item.name}（名称命中，主关键词缺少共同依据）`, [newId], targets);
                 continue;
             }
+            if (!overrides.has(newId) && keySignature(oldBook.entries[oldId]) && keywordOwner !== null && keywordOwner !== oldId) {
+                addReview(`${item.name}（标题与完整主关键词指向不同条目）`, [newId], [oldId, keywordOwner]);
+                continue;
+            }
             matched.push({ oldId, newId, checked: true, reason: '名单匹配' });
             claims.set(oldId, (claims.get(oldId) || 0) + 1);
         }
     }
 
+    const reservedTargets = new Set(reviewRows.old);
     const pairs = matched.filter(pair => {
-        if (claims.get(pair.oldId) === 1) return true;
-        addReview(`${entries.get(pair.newId).name}（与另一角色匹配到同一目标条目）`, [pair.newId], [pair.oldId]);
+        if (overrides.has(pair.newId)) return true;
+        const name = entries.get(pair.newId).name;
+        if (claims.get(pair.oldId) > 1) {
+            addReview(`${name}（与另一角色匹配到同一目标条目）`, [pair.newId], [pair.oldId]);
+        } else if (reviewRows.new.has(pair.newId) || reservedTargets.has(pair.oldId)) {
+            addReview(`${name}（名单中的其他名称或候选指向此配对）`, [pair.newId], [pair.oldId]);
+        } else return true;
         return false;
     });
-    return { pairs, additions, namesById: new Map([...entries].map(([id, item]) => [id, item.name])), review, reviewRows, missing };
+    for (const { oldId } of manualPairs) reviewRows.old.delete(oldId);
+    for (const pair of pairs) {
+        reviewRows.new.delete(pair.newId);
+        reviewReasons.delete(pair.newId);
+    }
+    const approvedAdditions = additions.filter(id => !reviewRows.new.has(id));
+    const states = new Map([...reviewRows.new].map(id => [id, 'review']));
+    for (const { newId } of pairs) states.set(newId, 'paired');
+    for (const id of approvedAdditions) states.set(id, 'new');
+    return { pairs, additions: approvedAdditions, states, namesById: new Map([...entries].map(([id, item]) => [id, item.name])), review, reviewRows, reviewReasons, missing };
 }
 
 export function buildRosterUpdate(oldBook, newBook, groups, mode, options) {
-    const { pairs, additions, namesById, review, missing } = matchRosterEntries(oldBook, newBook, groups, options);
+    return buildResolvedRosterUpdate(oldBook, newBook, matchRosterEntries(oldBook, newBook, groups, options), mode, options?.workKeys);
+}
+
+export function buildResolvedRosterUpdate(oldBook, newBook, { pairs, additions, namesById, review, missing }, mode, workKeys) {
     const replace = [], unchanged = [];
     for (const pair of pairs) {
         const name = namesById.get(pair.newId);
         if (!pairChanged(oldBook, newBook, pair, mode)) { unchanged.push(name); continue; }
         const targetTitle = oldBook.entries[pair.oldId].comment;
-        replace.push(compoundTitleNames(targetTitle, options?.workKeys).length ? `${name} → 「${targetTitle}」（更新整条）` : name);
+        replace.push(compoundTitleNames(targetTitle, workKeys).length ? `${name} → 「${targetTitle}」（更新整条）` : name);
     }
     const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions });
     return {
@@ -946,6 +1044,6 @@ export function orderWithPinned(entries, blockIds) {
 
 // 名单只限制来源范围；与整本匹配共用相同的身份和冲突判定。
 export function autoMatchScoped(oldBook, newBook, names, workKeys = []) {
-    if (!names?.length) return autoMatch(oldBook, newBook);
+    if (!names?.length) return autoMatch(oldBook, newBook, workKeys);
     return matchEntries(oldBook, newBook, entry => scopeMatch(entry, names, workKeys), workKeys);
 }

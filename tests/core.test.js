@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, buildUpdate, canonical, clone, pairManually, parseBook, replacement, validateBook } from '../core.js';
+import { autoMatch, autoMatchScoped, buildUpdate, canonical, classifyIncoming, clone, pairManually, parseBook, replacement, validateBook } from '../core.js';
 
 const e = (uid, comment, key, content = '旧正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(x => [String(x.uid), x])) });
@@ -54,6 +54,36 @@ test('缺少区分信息时，共用关键词、重复标题和多对一都留�
 });
 test('标题与关键词指向不同条目时不猜测', () => {
     assert.equal(autoMatch(book(e(0, 'A', ['a']), e(1, 'B', ['b'])), book(e(7, 'A', ['b']))).length, 0);
+    const target = book(e(0, '标题甲', ['公共词', '甲词']), e(1, '标题乙', ['公共词', '乙词']));
+    const mother = book(e(7, '标题甲', ['公共词', '乙词']));
+    assert.deepEqual(autoMatch(target, mother), []);
+    assert.equal(classifyIncoming(target, mother).get('7'), 'review');
+});
+test('合写标题以第一人名建立身份，主关键词仍须佐证', () => {
+    const fischl = book(e(8, '菲谢尔·冯·露弗施洛斯·那菲多特', ['菲谢尔·冯·露弗施洛斯·那菲多特', '断罪之皇女']));
+    const compound = book(e(0, '菲谢尔，奥兹', ['菲谢尔、奥兹', '夜鸦']));
+    assert.deepEqual(autoMatch(compound, fischl).map(p => p.newId), ['8']);
+    assert.deepEqual(autoMatch(fischl, compound).map(p => p.oldId), ['8']);
+    assert.deepEqual(autoMatch(compound, book(e(9, '奥兹', ['夜鸦']))), []);
+    assert.deepEqual(autoMatch(book(e(0, '菲谢尔，奥兹', ['夜鸦'])), fischl), []);
+    const twoPeople = book(e(0, '爱，好', ['共同称呼']));
+    const unrelated = book(e(9, '爱好', ['共同称呼']));
+    assert.deepEqual(autoMatch(twoPeople, unrelated), []);
+    assert.equal(classifyIncoming(twoPeople, unrelated).get('9'), 'new');
+});
+test('明确标注不同作品的同名条目各自独立，同作品译名可以匹配', () => {
+    const genshin = book(e(0, '原神·同名角色', ['共同称呼']));
+    const starRail = book(e(9, '角色：崩坏：星穹铁道：同名角色', ['共同称呼']));
+    const reviewTargets = new Set();
+    assert.deepEqual(autoMatch(genshin, starRail), []);
+    assert.deepEqual(autoMatchScoped(genshin, starRail, ['同名角色']), []);
+    assert.equal(classifyIncoming(genshin, starRail, [], reviewTargets).get('9'), 'new');
+    assert.deepEqual([...reviewTargets], []);
+    assert.deepEqual(autoMatch(genshin, book(e(8, '同名角色（Genshin Impact）', ['共同称呼']))).map(p => p.newId), ['8']);
+    const other = book(e(7, '无关角色（原神）', ['共同称呼']));
+    assert.deepEqual(autoMatch(book(e(6, '同名角色（原神）', ['共同称呼'])), other), []);
+    const target = book(e(0, '原神·同名角色', ['共同称呼', '目标关键词']), e(9, '绝区零·其他角色', ['共同称呼', '新关键词']));
+    assert.deepEqual(autoMatch(target, book(e(8, '原神·同名角色', ['共同称呼', '新关键词']))).map(p => p.oldId), ['0']);
 });
 test('正则只作为字面文本；不忽略大小写或移除正则标志', () => {
     assert.equal(autoMatch(book(e(0, '', ['/a,b/i'])), book(e(8, '', ['/a,b/i']))).length, 1);

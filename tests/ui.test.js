@@ -209,7 +209,7 @@ test('toggleFilteredSelection only toggles current search results and preserves 
     assert.equal(ui.isEntryChecked('13'), true);
 });
 
-test('copySelected only uses visible checked IDs, overrides pairs, and leaves hidden selection intact', async () => {
+test('copySelected copies visible checked IDs and preserves the original pairing and hidden selections', async () => {
     const { ui } = setup();
     ui.newSelection.set('11', true);
     ui.newSelection.set('13', true);
@@ -227,9 +227,10 @@ test('copySelected only uses visible checked IDs, overrides pairs, and leaves hi
         assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'New').length, 0);
         assert.equal(ui.isEntryChecked('13'), true);
         assert.equal(ui.pairs.filter(pair => pair.newId === '11').length, 1);
-        assert.equal(ui.pairs.find(pair => pair.newId === '11').reason, '本次新增');
+        assert.equal(ui.pairForSource('11').oldId, '1');
         ui.repair();
-        assert.equal(ui.pairs.filter(pair => pair.newId === '11').length, 1);
+        assert.equal(ui.pairForSource('11').oldId, '1');
+        assert.equal(ui.isEntryChecked('11'), false);
     });
 });
 
