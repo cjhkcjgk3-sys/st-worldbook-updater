@@ -15,6 +15,15 @@ test('仅唯一标题或完整关键词可定位；部分关键词不自动配�
     assert.equal(autoMatch(a, book(e(5, '另一个名称', ['A', 'B']))).length, 1);
     assert.equal(autoMatch(a, book(e(5, '另一个名称', ['A']))).length, 0);
 });
+test('整本配对可识别尼可的唯一简称，重名或仅部分主关键词重叠时保持待核对', () => {
+    const mother = book(e(10, '尼可·莱恩', ['尼可·莱恩', '魔女「N」', '喧寂于心']));
+    const nico = e(1, '尼可', ['尼可·莱恩', '魔女N', '尼可']);
+    const target = book(nico);
+    assert.deepEqual(autoMatch(target, mother), [{ oldId: '1', newId: '10', checked: true, reason: '全名或简称一致' }]);
+    assert.deepEqual(autoMatch(book(nico, e(2, '尼可', ['另一个关键词'])), mother), []);
+    assert.deepEqual(autoMatch(target, book(mother.entries['10'], e(11, '尼可·另一人', ['其他']))), []);
+    assert.deepEqual(autoMatch(book(e(2, '另一位魔女', ['魔女「N」', '另一别名'])), mother), []);
+});
 test('空标题、空关键词和碰巧相同 uid 不建立配对', () => {
     assert.equal(autoMatch(book(e(0, '', [])), book(e(0, '', []))).length, 0);
 });

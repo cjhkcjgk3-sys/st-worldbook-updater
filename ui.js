@@ -1,4 +1,4 @@
-const VERSION = '1.10.4';
+const VERSION = '1.10.5';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -150,7 +150,7 @@ export class UpdaterWindow {
               <section class="stwu-entry-window" aria-label="条目对照窗口">
               <div class="stwu-panels">
                 <section class="stwu-pane" data-side="new" aria-label="母本">
-                  <div class="stwu-pane-head"><h3>母本</h3><span class="stwu-count"></span></div>
+                  <div class="stwu-pane-head"><h3>母本</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="new" title="跳到母本待核对条目" hidden></button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择母本" data-book="new"></select>
                   <div class="stwu-source-line"><button type="button" class="menu_button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
                   <input class="text_pole" type="search" data-search="new" aria-label="搜索母本条目" placeholder="搜索标题、关键词" autocomplete="off">
@@ -158,7 +158,7 @@ export class UpdaterWindow {
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="母本每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="母本上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="母本下一页">›</button></div>
                 </section>
                 <section class="stwu-pane" data-side="old" aria-label="目标书">
-                  <div class="stwu-pane-head"><h3>目标书</h3><span class="stwu-count"></span></div>
+                  <div class="stwu-pane-head"><h3>目标书</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="old" title="跳到目标书待核对条目" hidden></button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择目标书" data-book="old"></select>
                   <div class="stwu-source-line">目标书独有条目会保留</div>
                   <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" autocomplete="off">
@@ -268,6 +268,7 @@ export class UpdaterWindow {
         });
         for (const side of ['old', 'new']) {
             this.on(this.find(`[data-book="${side}"]`), 'change', e => this.run(() => this.loadSide(side, e.target.value)));
+            this.on(this.find(`[data-review-jump="${side}"]`), 'click', () => this.jumpToReview(side));
             this.on(this.find(`[data-search="${side}"]`), 'input', () => { this.page[side] = 1; this.renderList(side); this.renderControls(); });
             this.on(this.find(`[data-page-size="${side}"]`), 'change', event => { this.pageSize[side] = Number(event.target.value) || 25; this.page[side] = 1; this.find(`[data-list="${side}"]`).scrollTop = 0; this.renderList(side); this.renderControls(); });
             for (const btn of this.dialog.querySelectorAll(`[data-page-step^="${side}:"]`)) {
@@ -504,10 +505,11 @@ export class UpdaterWindow {
         const manual = this.pairs.filter(pair => (pair.reason === '手动配对' || pair.reason === '本次新增') && oldEntries[pair.oldId] && newEntries[pair.newId]);
         const usedOld = new Set(manual.map(pair => pair.oldId)), usedNew = new Set(manual.map(pair => pair.newId));
         const roster = this.scopeGroups?.length
-            ? matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions(manual)).pairs
-            : [];
+            ? matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions(manual))
+            : null;
+        this.rosterReviewRows = roster?.reviewRows ?? null;
         const scoped = this.scopeNames.length ? autoMatchScoped(this.oldBook, this.newBook, this.scopeNames, workKeysOf(this.scopeWorks)) : [];
-        const proposals = [...roster, ...scoped, ...autoMatch(this.oldBook, this.newBook)];
+        const proposals = [...(roster?.pairs ?? []), ...scoped, ...autoMatch(this.oldBook, this.newBook)];
         const pairs = [...manual];
         for (const pair of proposals) {
             if (usedOld.has(pair.oldId) || usedNew.has(pair.newId) || this.unpairedOld.has(pair.oldId) || this.unpairedNew.has(pair.newId)) continue;
@@ -705,10 +707,33 @@ export class UpdaterWindow {
         return `母本命中 ${hit} 条。打开「按名单更新」查看处理结果。`;
     }
 
-    invalidateIncoming() { this.incomingCache = null; }
+    invalidateIncoming() { this.incomingCache = null; this.rosterReviewRows = null; }
     incoming() {
-        if (!this.oldBook || !this.newBook) return new Map();
-        return this.incomingCache ||= classifyIncoming(this.oldBook, this.newBook, this.pairs);
+        const reviewRows = { new: new Set(), old: new Set() };
+        if (!this.oldBook || !this.newBook) return { states: new Map(), reviewRows };
+        if (this.incomingCache) return this.incomingCache;
+        const scoped = this.scopeGroups?.length;
+        const states = classifyIncoming(this.oldBook, this.newBook, this.pairs, scoped ? undefined : reviewRows.old);
+        if (scoped) {
+            this.rosterReviewRows ??= matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions()).reviewRows;
+            return this.incomingCache = { states, reviewRows: this.rosterReviewRows };
+        }
+        for (const [id, state] of states) if (state === 'review') reviewRows.new.add(id);
+        return this.incomingCache = { states, reviewRows };
+    }
+
+    jumpToReview(side) {
+        const reviewIds = this.incoming().reviewRows[side];
+        const index = this.filteredRows[side].findIndex(({ id }) => reviewIds.has(id));
+        if (index === -1) return;
+        const { id } = this.filteredRows[side][index];
+        this.page[side] = Math.floor(index / this.pageSize[side]) + 1;
+        this.renderList(side);
+        this.renderControls();
+        const list = this.find(`[data-list="${side}"]`);
+        const row = this.rowElements[side].get(id);
+        list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        row.querySelector('.stwu-entry-button').focus({ preventScroll: true });
     }
     syncPairIndex() {
         this.pairBySource = new Map(this.pairs.map(pair => [pair.newId, pair]));
@@ -873,17 +898,24 @@ export class UpdaterWindow {
         const fragment = document.createDocumentFragment();
         const rowElements = new Map();
         const pairsById = new Map(this.pairs.map((p, i) => [side === 'old' ? p.oldId : p.newId, { pair: p, number: i + 1 }]));
-        const pinning = this.pinMatches && this.newBook && (this.pairs.length > 0 || this.scopeNames.length > 0);
+        const { states, reviewRows } = this.incoming();
+        const reviewIds = reviewRows[side];
+        const pinning = this.pinMatches && this.newBook && (this.pairs.length > 0 || this.scopeNames.length > 0 || reviewIds.size > 0);
         const pinned = new Set();
         let rows = book ? listEntries(book) : [];
         if (pinning) {
             const sourceRows = side === 'new' ? rows : listEntries(this.newBook);
             const scopedIds = this.scopeNames.length ? sourceRows.filter(({ id }) => this.inScope(id)).map(({ id }) => id) : [];
-            const block = pinBlock(sourceRows, this.pairs, side, scopedIds, pair => this.isEntryChecked(pair.newId));
+            const reviewOrder = rows.filter(({ id }) => reviewIds.has(id)).map(({ id }) => id);
+            const block = pinBlock(sourceRows, this.pairs, side, scopedIds, pair => this.isEntryChecked(pair.newId), reviewOrder);
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);
         }
         const filtered = rows.filter(({ entry }) => !search || [entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search));
+        const reviewCount = reviewIds.size ? filtered.filter(({ id }) => reviewIds.has(id)).length : 0;
+        const reviewJump = this.find(`[data-review-jump="${side}"]`);
+        reviewJump.hidden = !reviewCount;
+        if (reviewCount) reviewJump.textContent = `待核对 ${reviewCount}`;
         this.filteredRows[side] = filtered;
         if (side === 'new') this.visibleSourceSet = new Set(filtered.map(({ id }) => id));
         const pageCount = Math.max(1, Math.ceil(filtered.length / this.pageSize[side]));
@@ -906,14 +938,16 @@ export class UpdaterWindow {
             const button = element('button', 'menu_button stwu-entry-button'); button.type = 'button'; button.disabled = this.busy;
             button.setAttribute('aria-pressed', String(li.classList.contains('stwu-entry-selected')));
             button.append(element('span', 'stwu-entry-title', title(entry)));
-            const state = side === 'new' ? this.incoming().get(id) : null;
+            const state = side === 'new' ? states.get(id) : null;
+            const needsReview = reviewIds.has(id);
             const unpairedLabel = side === 'old' ? '目标书独有 · 保留'
                 : !this.inScope(id) ? '名单外'
                 : state === 'duplicate' ? '内容重复 · 可复制'
-                : state === 'review' ? '待核对 · 可复制'
-                : state === 'new' ? '未配对 · 可复制' : '待载入目标书';
+                : state ? '未配对 · 可复制' : '待载入目标书';
             li.classList.toggle('stwu-entry-pinned', pinned.has(id));
-            const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + (pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel));
+            const pairing = pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel;
+            const label = needsReview ? (pair ? `待核对 · ${pairing}` : '待核对') : pairing;
+            const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + label);
             status.classList.toggle('stwu-paired', !!pair); button.append(status);
             li.append(button); fragment.append(li); rowElements.set(String(id), li);
         }

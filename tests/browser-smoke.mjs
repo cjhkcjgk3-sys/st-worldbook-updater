@@ -246,6 +246,48 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        const common = Array.from({ length: 30 }, (_, i) => entry(i, `角色 ${i}`, [], '旧正文'));
+        const target = book([...common, entry(80, '尼可', ['尼可·莱恩', '魔女N', '尼可'], '旧正文'),
+            entry(81, '露娜', [], '待核对甲'), entry(82, '露娜', [], '待核对乙')]);
+        const mother = book([...common.map(row => ({ ...row, uid: row.uid + 100, content: '新正文' })),
+            entry(180, '尼可·莱恩', ['尼可·莱恩', '魔女「N」', '喧寂于心'], '新正文'),
+            entry(181, '露娜·费尔', [], '待核对正文'), entry(182, '母本独有', [], '新条目')]);
+        state.books.set('演示_目标书', target);
+        state.books.set('演示_母本', mother);
+        const { page, ctx, errors } = await prepare(320, 568);
+        const status = (side, id) => page.locator(`[data-list="${side}"] [data-id="${id}"] .stwu-entry-status`);
+        const sourceJump = page.locator('[data-review-jump="new"]');
+        const targetJump = page.locator('[data-review-jump="old"]');
+        assert.equal(await sourceJump.textContent(), '待核对 1');
+        assert.equal(await targetJump.textContent(), '待核对 2');
+        await sourceJump.click();
+        assert.equal(await page.locator('[data-page-status="new"]').textContent(), '2 / 2');
+        assert.match(await status('new', 180).textContent(), /置顶 · 配对 \d+ · 有变化/);
+        assert.equal(await status('new', 181).textContent(), '置顶 · 待核对');
+        await targetJump.click();
+        assert.equal(await page.locator('[data-page-status="old"]').textContent(), '2 / 2');
+        assert.equal(await status('old', 80).textContent(), await status('new', 180).textContent());
+        assert.equal(await status('old', 81).textContent(), '置顶 · 待核对');
+        assert.equal(await status('old', 82).textContent(), '置顶 · 待核对');
+        await page.locator('[data-search="old"]').fill('尼可');
+        assert.equal(await targetJump.isVisible(), false);
+        await page.locator('[data-search="old"]').fill('');
+        await openTool(page, 'stwu-scope');
+        await page.locator('[data-scope]').fill('尼可\n露娜');
+        await page.locator('[data-scope]').press('Tab');
+        await page.locator('.stwu-scope > summary').click();
+        assert.equal(await targetJump.textContent(), '待核对 2');
+        await targetJump.click();
+        assert.equal(await status('old', 81).textContent(), '置顶 · 待核对');
+        await page.getByRole('button', { name: '按名单更新', exact: true }).click();
+        assert.match(await page.locator('[data-roster-summary]').textContent(), /替换 1 · 复制 0 · 无变化 0 · 待核对 1/);
+        assert.equal(state.writes, 0);
+        assert.deepEqual(errors, []);
+        results.push('尼可整本配对、待核对双栏置顶、跨页跳转、搜索及名单预览一致性通过');
+        await ctx.close();
+    }
+
     // 150-entry pagination & page jump
     reset(); {
         const manyBook = book(Array.from({ length: 150 }, (_, i) => entry(i, `角色 ${String(i + 1).padStart(3, '0')}`, [`角色 ${i + 1}`], `正文 ${i + 1}`)));
