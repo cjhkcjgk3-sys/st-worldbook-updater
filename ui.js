@@ -1,7 +1,8 @@
-const VERSION = '1.13.5';
+const VERSION = '1.14.0';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
+const BACKUP_STORAGE_KEY = 'st-worldbook-updater.temp-backups';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, planBatchMatchedDeletion, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildTargetSelfConsolidation, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, diffLines, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, planBatchMatchedDeletion, planTargetSelfDuplicates, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
 const entryIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
@@ -43,6 +44,9 @@ export class UpdaterWindow {
         this.lastSelectedSide = null;
         this.previewOpen = false;
         this.splitMode = 'balanced';
+        this.viewMode = 'both';
+        this.diffMode = false;
+        this.backupTtlMinutes = 10;
         this.mode = 'content';
         this.scopeNames = [];
         this.scopeGroups = [];
@@ -114,6 +118,10 @@ export class UpdaterWindow {
                     <button type="button" class="menu_button" data-pair-btn="consolidate">合并或删除目标条目</button>
                     <button type="button" class="menu_button" data-pair-btn="batch-consolidate">批量合并重复</button>
                     <button type="button" class="menu_button" data-pair-btn="batch-delete">批量匹配删除</button>
+                    <button type="button" class="menu_button" data-pair-btn="self-dedup">目标内部去重</button>
+                    <button type="button" class="menu_button" data-pair-btn="restore-backup">恢复临时备份</button>
+                    <button type="button" class="menu_button" data-pair-btn="download-target">导出目标书</button>
+                    <label class="stwu-backup-ttl">备份保留<select class="text_pole" data-backup-ttl aria-label="临时备份保留时长"><option value="10" selected>10 分钟</option><option value="30">30 分钟</option></select></label>
                     <button type="button" class="menu_button" data-action="swap-sides">交换左右</button>
                   </div>
                   <span class="stwu-pairhint">点击两侧条目后，可在此配对或解除</span>
@@ -165,6 +173,7 @@ export class UpdaterWindow {
               </select>
               <button type="button" class="menu_button" data-action="toggle-selection" aria-pressed="false">批量勾选</button>
               <button type="button" class="menu_button" data-quick-pair data-pair-btn="pair" title="将当前两侧选中的条目配对，或解除已配对" disabled>快速配对</button>
+              <button type="button" class="menu_button stwu-mini-btn" data-action="cycle-view" title="切换双栏、仅母本或仅目标书视图">视图：双栏</button>
               <span class="stwu-selection stwu-selection-compact" data-selection-summary="compact" aria-live="polite"></span>
             </div>
             <div class="stwu-workspace" data-preview-open="false" data-split="balanced">
@@ -194,6 +203,7 @@ export class UpdaterWindow {
                 <div class="stwu-preview-head">
                   <h3><i class="fa-solid fa-align-left" aria-hidden="true"></i> 正文对照</h3>
                   <div class="stwu-preview-actions">
+                    <button type="button" class="menu_button stwu-mini-btn" data-action="toggle-diff" aria-pressed="false" title="高亮显示母本与目标书正文的差异行">差异高亮</button>
                     <button type="button" class="menu_button stwu-mini-btn" data-action="cycle-split" title="切换或重置条目与正文窗口高度比例">高度：均分</button>
                     <button type="button" class="menu_button stwu-mini-btn" data-action="close-preview">收起</button>
                   </div>
@@ -268,6 +278,8 @@ export class UpdaterWindow {
             if (!action || this.busy) return;
             if (action === 'close') this.hide();
             if (action === 'cycle-split') this.cycleSplitMode();
+            if (action === 'cycle-view') this.cycleViewMode();
+            if (action === 'toggle-diff') { this.diffMode = !this.diffMode; this.renderPreview(); }
             if (action === 'close-preview') { this.previewOpen = false; this.clearManualHeights(); this.renderPreview(); }
             if (action === 'toggle-size') {
                 this.setExpanded(!this.dialog.classList.contains('stwu-expanded'));
@@ -292,13 +304,16 @@ export class UpdaterWindow {
                 this.rosterPreview = null;
                 this.batchConsolidationPreview = null;
                 this.batchDeletionPreview = null;
+                this.selfDedupPreview = null;
                 this.find('[data-roster-dialog]').close();
             }
             if (action === 'save-roster') {
                 this.find('[data-roster-dialog]').close();
-                this.run(() => this.batchDeletionPreview
-                    ? this.saveBatchDeletion()
-                    : this.batchConsolidationPreview ? this.saveBatchConsolidation() : this.saveRoster());
+                this.run(() => this.selfDedupPreview
+                    ? this.saveTargetSelfDedup()
+                    : this.batchDeletionPreview
+                        ? this.saveBatchDeletion()
+                        : this.batchConsolidationPreview ? this.saveBatchConsolidation() : this.saveRoster());
             }
             if (action === 'close-consolidation') {
                 this.targetOperation = null;
@@ -382,6 +397,10 @@ export class UpdaterWindow {
         this.on(this.find('[data-scope]'), 'change', () => this.applyScope());
         this.on(this.find('[data-selection-category]'), 'change', () => this.renderBulkSelection());
         this.on(this.find('[data-scope-pin]'), 'change', event => { this.pinMatches = event.target.checked; this.render(); });
+        this.on(this.find('[data-backup-ttl]'), 'change', event => {
+            this.backupTtlMinutes = Number(event.target.value) === 30 ? 30 : 10;
+            this.message(`临时备份将保留 ${this.backupTtlMinutes} 分钟，到期自动清理。`);
+        });
         this.on(this.find('[data-file]'), 'change', event => {
             const file = event.target.files?.[0];
             event.target.value = '';
@@ -498,6 +517,9 @@ export class UpdaterWindow {
         else if (action === 'consolidate') this.run(() => this.openTargetOperation());
         else if (action === 'batch-consolidate') this.run(() => this.previewBatchConsolidation());
         else if (action === 'batch-delete') this.run(() => this.previewBatchDeletion());
+        else if (action === 'self-dedup') this.run(() => this.previewTargetSelfDedup());
+        else if (action === 'restore-backup') this.run(() => this.restoreTempBackup());
+        else if (action === 'download-target') this.downloadTargetBackup();
         else if (action === 'auto') { this.repair(); this.message(`已重新自动匹配，共 ${this.pairs.length} 组；保留人工配对、解除和勾选。`); this.render(); }
         else if (action === 'auto-reset' && globalThis.confirm('将清除人工配对、解除记录及当前勾选，重新自动匹配。确认？')) {
             this.resetPairDecisions(); this.repair(); this.message(`已重置配对决定，自动匹配 ${this.pairs.length} 组。`); this.render();
@@ -830,6 +852,7 @@ export class UpdaterWindow {
         }
         const byRoster = this.find('[data-set-scope]').value === 'scope';
         const dependency = byRoster && !target && this.oldBook ? { name: this.oldName, data: this.oldBook } : undefined;
+        if (target && !byRoster) this.saveTempBackup(name, book, '条目设置前快照');
         const saved = byRoster && target
             ? await this.saveTargetFromMother(next)
             : await this.service.updateDirect(name, book, next, dependency);
@@ -1289,10 +1312,20 @@ export class UpdaterWindow {
         setDisabled('consolidate', !canTargetOp);
         setDisabled('batch-consolidate', !ready || this.service.requiresReload || this.sameNamedBook());
         setDisabled('batch-delete', !ready || this.service.requiresReload || this.sameNamedBook() || (!this.selectedSourceIds().length && !this.scopeNames.length));
+        setDisabled('self-dedup', this.busy || !this.oldBook || this.service.requiresReload);
+        setDisabled('download-target', this.busy || !this.oldBook);
+        const backups = this.pruneTempBackups();
+        setDisabled('restore-backup', this.busy || !this.oldBook || this.service.requiresReload || !backups.length);
         const targetOpBtn = this.find('[data-action="target-operation"]');
         if (targetOpBtn) targetOpBtn.disabled = !canTargetOp;
         const hint = this.find('.stwu-pairbar .stwu-pairhint');
         if (hint) hint.textContent = canUnpair ? '当前条目已配对，可直接解除' : canPair ? '已选两侧条目，可执行配对' : '点击两侧条目后，可在此配对或解除';
+    }
+
+    cycleViewMode() {
+        const order = ['both', 'new', 'old'];
+        this.viewMode = order[(order.indexOf(this.viewMode || 'both') + 1) % order.length];
+        this.renderPreview();
     }
 
     renderPreview() {
@@ -1300,6 +1333,18 @@ export class UpdaterWindow {
         workspace.dataset.previewOpen = String(this.previewOpen);
         const split = this.splitMode || 'balanced';
         workspace.dataset.split = split;
+        const view = this.viewMode || 'both';
+        workspace.dataset.view = view;
+        const viewBtn = this.find('[data-action="cycle-view"]');
+        if (viewBtn) {
+            const viewLabels = { both: '视图：双栏', new: '视图：仅母本', old: '视图：仅目标' };
+            viewBtn.textContent = viewLabels[view] || viewLabels.both;
+        }
+        const diffBtn = this.find('[data-action="toggle-diff"]');
+        if (diffBtn) {
+            diffBtn.setAttribute('aria-pressed', String(!!this.diffMode));
+            diffBtn.textContent = this.diffMode ? '差异高亮：开' : '差异高亮';
+        }
         const splitBtn = this.find('[data-action="cycle-split"]');
         if (splitBtn) {
             const labels = { balanced: '高度：均分', body: '高度：正文大', list: '高度：列表大' };
@@ -1309,11 +1354,25 @@ export class UpdaterWindow {
             old: this.oldBook?.entries[this.selectedOld],
             new: this.newBook?.entries[this.selectedNew],
         };
+        const showDiff = !!(this.diffMode && entries.old && entries.new);
+        const diff = showDiff ? diffLines(entries.old.content, entries.new.content) : null;
         for (const side of ['old', 'new']) {
             const entry = entries[side];
             this.find(`[data-preview-title="${side}"]`).textContent = entry ? title(entry) : '未选择对应条目';
             this.find(`[data-preview-keys="${side}"]`).textContent = entry ? `关键词：${entry.key?.join('、') || '无'}` : '';
-            this.find(`[data-preview-content="${side}"]`).textContent = entry?.content ?? '尚未选择对应条目。';
+            const contentNode = this.find(`[data-preview-content="${side}"]`);
+            if (diff && contentNode.replaceChildren) {
+                const frag = document.createDocumentFragment();
+                for (const line of diff) {
+                    if (side === 'old' && line.type === 'add') continue;
+                    if (side === 'new' && line.type === 'del') continue;
+                    const span = element('span', `stwu-diff-line stwu-diff-${line.type}`, line.text);
+                    frag.append(span);
+                }
+                contentNode.replaceChildren(frag);
+            } else {
+                contentNode.textContent = entry?.content ?? '尚未选择对应条目。';
+            }
             const { content: _content, ...settings } = entry || {};
             this.find(`[data-preview-settings="${side}"]`).textContent = entry ? JSON.stringify(settings, null, 2) : '';
         }
@@ -1387,8 +1446,122 @@ export class UpdaterWindow {
     }
 
     saveTargetFromMother(next, { target = this.oldName, before = this.oldBook, mother = this.newBook } = {}) {
+        if (target && before) this.saveTempBackup(target, before, '写入前自动快照');
         const source = this.sourceKind === 'book' ? { name: this.newName, data: mother } : undefined;
         return this.service.updateDirect(target, before, next, source);
+    }
+
+    pruneTempBackups() {
+        try {
+            const raw = globalThis.localStorage?.getItem(BACKUP_STORAGE_KEY);
+            if (!raw) return [];
+            const now = Date.now();
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return [];
+            const valid = parsed.filter(item => item && typeof item.expiresAt === 'number' && item.expiresAt > now && item.data?.entries);
+            if (valid.length !== parsed.length) globalThis.localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(valid));
+            return valid;
+        } catch {
+            return [];
+        }
+    }
+
+    saveTempBackup(target, data, label = '自动备份') {
+        try {
+            if (!globalThis.localStorage || !target || !data) return;
+            const ttl = (this.backupTtlMinutes === 30 ? 30 : 10) * 60 * 1000;
+            const list = this.pruneTempBackups().filter(item => item.target !== target || item.createdAt < Date.now() - 2000);
+            list.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, target, label, createdAt: Date.now(), expiresAt: Date.now() + ttl, data: clone(data) });
+            while (list.length > 5) list.pop();
+            while (list.length) {
+                try {
+                    globalThis.localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(list));
+                    break;
+                } catch {
+                    list.pop();
+                }
+            }
+        } catch {
+            // 临时备份容量不足时静默跳过，不阻断正常写入。
+        }
+    }
+
+    async restoreTempBackup() {
+        const backups = this.pruneTempBackups();
+        const match = backups.find(item => item.target === this.oldName) || backups[0];
+        if (!match) {
+            this.message('没有可用的临时备份（已过期或尚未写入过）。');
+            return;
+        }
+        if (match.target !== this.oldName) {
+            this.message(`最近一份临时备份属于「${match.target}」，请先在目标书选择该世界书后再恢复。`);
+            return;
+        }
+        const leftMin = Math.max(1, Math.ceil((match.expiresAt - Date.now()) / 60000));
+        const time = new Date(match.createdAt).toLocaleTimeString('zh-CN', { hour12: false });
+        if (!globalThis.confirm(`将把目标书「${this.oldName}」恢复到 ${time} 的临时备份（剩余 ${leftMin} 分钟自动清理）。确认覆盖当前内容？`)) return;
+        this.message('正在从临时备份恢复目标书…');
+        const saved = await this.service.updateDirect(this.oldName, this.oldBook, clone(match.data));
+        this.oldBook = saved.data;
+        if (this.sameNamedBook()) this.newBook = saved.data;
+        this.repair();
+        this.message(`已从 ${time} 的临时备份恢复目标书「${this.oldName}」。${saved.note || ''}`);
+    }
+
+    downloadTargetBackup() {
+        if (!this.oldBook) return;
+        const blob = new Blob([JSON.stringify(this.oldBook, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        this.urls.add(url);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${this.oldName || 'worldbook'}-备份.json`;
+        link.click();
+        this.message(`已导出目标书「${this.oldName}」备份文件。`);
+    }
+
+    previewTargetSelfDedup() {
+        if (!this.oldBook) return;
+        const plan = planTargetSelfDuplicates(this.oldBook, { workKeys: this.scopeWorkKeys });
+        if (!plan.groups.length) {
+            this.message('目标书中没有检测到同名内部重复条目。');
+            return;
+        }
+        this.rosterPreview = null;
+        this.batchConsolidationPreview = null;
+        this.batchDeletionPreview = null;
+        this.selfDedupPreview = { plan, before: this.oldBook, target: this.oldName };
+        const heading = this.find('#stwu-roster-heading');
+        if (heading) heading.textContent = '目标书内部去重';
+        const saveBtn = this.find('[data-action="save-roster"]');
+        saveBtn.textContent = '确认清理';
+        saveBtn.hidden = false;
+        this.find('[data-roster-summary]').textContent = `目标书「${this.oldName}」共检测到 ${plan.groups.length} 组同名重复条目（保留每组第 1 条，移除 ${plan.removedCount} 条多余副本）。`;
+        this.find('[data-roster-report]').textContent = plan.groups
+            .map(g => `${g.name}：保留 UID ${g.oldId}，移除 UID ${g.duplicateOldIds.join('、')}`)
+            .join('\n');
+        this.find('[data-roster-dialog]').showModal();
+        this.find('[data-roster-report]').scrollTop = 0;
+    }
+
+    async saveTargetSelfDedup() {
+        const preview = this.selfDedupPreview;
+        this.selfDedupPreview = null;
+        if (!preview) return;
+        const { plan, before, target } = preview;
+        if (target !== this.oldName || before !== this.oldBook) {
+            throw new Error('目标书在预览后已变化，请重新扫描。');
+        }
+        const result = buildTargetSelfConsolidation(before, plan.groups);
+        this.message('正在清理目标书内部重复条目并核验…');
+        const saved = await this.saveTargetFromMother(result.data, { target, before });
+        this.oldBook = saved.data;
+        if (this.sameNamedBook()) this.newBook = saved.data;
+        const removed = new Set(result.removedOldIds);
+        this.pairs = this.pairs.filter(pair => !removed.has(pair.oldId));
+        for (const id of removed) this.unpairedOld.delete(id);
+        this.repair(false, false);
+        this.message(`已核验并清理目标书内部重复 ${result.removed} 条（保留 ${plan.groups.length} 条）。${saved.note || ''}`);
     }
 
     openTargetOperation() {
@@ -1538,6 +1711,7 @@ export class UpdaterWindow {
         const plan = buildResolvedRosterUpdate(this.oldBook, this.newBook, roster, this.mode, this.scopeWorkKeys);
         this.batchConsolidationPreview = null;
         this.batchDeletionPreview = null;
+        this.selfDedupPreview = null;
         this.rosterPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName };
         const heading = this.find('#stwu-roster-heading');
         if (heading) heading.textContent = '按名单更新';
@@ -1572,6 +1746,7 @@ export class UpdaterWindow {
         const removedTotal = plan.groups.reduce((sum, g) => sum + g.duplicateOldIds.length, 0);
         this.rosterPreview = null;
         this.batchDeletionPreview = null;
+        this.selfDedupPreview = null;
         this.batchConsolidationPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName, mode: this.mode };
         const heading = this.find('#stwu-roster-heading');
         if (heading) heading.textContent = '批量合并重复（1:N）';
@@ -1644,6 +1819,7 @@ export class UpdaterWindow {
         }
         this.rosterPreview = null;
         this.batchConsolidationPreview = null;
+        this.selfDedupPreview = null;
         this.batchDeletionPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName };
         const heading = this.find('#stwu-roster-heading');
         if (heading) heading.textContent = '批量匹配删除';

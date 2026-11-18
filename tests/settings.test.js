@@ -11,7 +11,7 @@ const entry = () => ({
 test('核心字段表包含约定的十项，不含分组与角色过滤', () => {
     assert.deepEqual(SETTINGS_FIELDS.map(f => f.key), [
         'position', 'depth', 'role', 'order', 'constant',
-        'excludeRecursion', 'preventRecursion', 'delayUntilRecursion', 'ignoreBudget',
+        'excludeRecursion', 'preventRecursion', 'delayUntilRecursion', 'ignoreBudget', 'disable',
     ]);
     for (const key of ['group', 'groupWeight', 'characterFilterNames', 'triggers', 'vectorized', 'outletName', 'sticky', 'cooldown']) {
         assert.equal(isSettingsField(key), false, key);

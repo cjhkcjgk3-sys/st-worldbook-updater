@@ -188,6 +188,25 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-consolidate-candidate input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; }
 .stwu-consolidate-candidate small { color: var(--wu-em); }
 
+.stwu-workspace[data-view="new"] .stwu-panels,
+.stwu-workspace[data-view="old"] .stwu-panels,
+.stwu-workspace[data-view="new"] .stwu-preview-grid,
+.stwu-workspace[data-view="old"] .stwu-preview-grid { grid-template-columns: minmax(0,1fr); }
+.stwu-workspace[data-view="new"] .stwu-pane[data-side="old"],
+.stwu-workspace[data-view="old"] .stwu-pane[data-side="new"],
+.stwu-workspace[data-view="new"] .stwu-preview-pane[data-preview-side="old"],
+.stwu-workspace[data-view="old"] .stwu-preview-pane[data-preview-side="new"] { display: none; }
+.stwu-workspace[data-view="new"] .stwu-pane,
+.stwu-workspace[data-view="old"] .stwu-pane,
+.stwu-workspace[data-view="new"] .stwu-preview-pane,
+.stwu-workspace[data-view="old"] .stwu-preview-pane { border-left: 0; }
+.stwu-diff-line { display: block; padding: 0 3px; border-radius: 2px; }
+.stwu-diff-del { background: rgba(220, 60, 60, .2); color: var(--wu-text); }
+.stwu-diff-del::before { content: "- "; color: #ff8a8a; font-weight: 600; }
+.stwu-diff-add { background: rgba(60, 180, 90, .2); color: var(--wu-text); }
+.stwu-diff-add::before { content: "+ "; color: #86efac; font-weight: 600; }
+.stwu-backup-ttl { display: inline-flex; align-items: center; gap: 4px; font-size: .82em; color: var(--wu-em); white-space: nowrap; }
+.stwu-backup-ttl select.text_pole { width: auto; min-height: 30px; padding: 2px 18px 2px 6px; font-size: .95em; }
 @media (max-width: 680px) {
   dialog.stwu-dialog.popup { width: calc(100vw - 8px); height: clamp(320px, calc(var(--wu-vh,100dvh) - 8px), 100dvh); max-width: calc(100vw - 8px); max-height: calc(var(--wu-vh,100dvh) - 8px); padding: 4px 6px; }
   dialog.stwu-dialog.popup.stwu-expanded { width: 100vw; height: var(--wu-vh,100dvh); max-width: 100vw; max-height: var(--wu-vh,100dvh); padding: max(4px,env(safe-area-inset-top)) 7px max(4px,env(safe-area-inset-bottom)); border: 0; border-radius: 0; }

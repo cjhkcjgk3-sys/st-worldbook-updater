@@ -1142,6 +1142,40 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        const { page, ctx } = await prepare();
+        // 差异高亮、单栏/双栏视图切换、目标内部去重、定时临时备份与一键恢复
+        await page.locator('[data-list="new"] [data-id="90"] .stwu-entry-button').click();
+        await page.locator('[data-action="toggle-diff"]').click();
+        assert.equal(await page.locator('[data-action="toggle-diff"]').getAttribute('aria-pressed'), 'true');
+        assert.ok((await page.locator('[data-preview-content="new"] .stwu-diff-add').count()) >= 1);
+
+        await page.locator('[data-action="cycle-view"]').click();
+        assert.equal(await page.locator('.stwu-workspace').getAttribute('data-view'), 'new');
+        await page.locator('[data-action="cycle-view"]').click();
+        assert.equal(await page.locator('.stwu-workspace').getAttribute('data-view'), 'old');
+        await page.locator('[data-action="cycle-view"]').click();
+        assert.equal(await page.locator('.stwu-workspace').getAttribute('data-view'), 'both');
+
+        // 目标内部去重（共同标题 uid 1 和 2）并在写入前自动保存临时备份
+        await page.locator('.stwu-pairbar > summary').click();
+        await page.locator('[data-pair-btn="self-dedup"]').click();
+        await page.locator('[data-roster-dialog]').waitFor({ state: 'visible' });
+        assert.match(await page.locator('[data-roster-summary]').textContent(), /共检测到 1 组同名重复条目/);
+        await page.locator('[data-action="save-roster"]').click();
+        await page.waitForFunction(() => /^已核验并清理目标书内部重复 1 条/.test(document.querySelector('.stwu-notice').textContent));
+        assert.equal(state.books.get('演示_目标书').entries['2'], undefined);
+
+        // 恢复临时备份，应把 uid 2 恢复回来
+        await page.locator('.stwu-pairbar > summary').click();
+        page.once('dialog', d => d.accept());
+        await page.locator('[data-pair-btn="restore-backup"]').click();
+        await page.waitForFunction(() => /^已从 .* 的临时备份恢复目标书/.test(document.querySelector('.stwu-notice').textContent));
+        assert.ok(state.books.get('演示_目标书').entries['2']);
+        results.push('差异高亮、单双栏切换、目标内部去重与定时临时备份恢复通过');
+        await ctx.close();
+    }
+
     const report = { pass: true, browser: await browser.version(), results };
     if (process.env.REPORT_FILE) await fs.writeFile(process.env.REPORT_FILE, JSON.stringify(report, null, 2) + '\n');
     console.log(JSON.stringify(report, null, 2));
