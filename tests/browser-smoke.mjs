@@ -1097,8 +1097,12 @@ try {
 
     reset(); {
         const { page, ctx } = await prepare();
-        // 不选中母本条目，直接在目标书侧勾选独有条目 uid 4 并通过目标栏「合并/删除」按钮直接删除
+        // 不选中母本条目，直接在目标书侧通过「勾选未配对」或勾选独有条目 uid 4 并通过目标栏「合并/删除」按钮直接删除
         assert.equal(await page.locator('[data-action="target-operation"]').isDisabled(), true);
+        await page.locator('[data-action="toggle-target-unpaired"]').click();
+        assert.equal(await page.locator('[data-list="old"] [data-id="4"] input').isChecked(), true);
+        await page.locator('[data-action="toggle-target-unpaired"]').click();
+        assert.equal(await page.locator('[data-list="old"] [data-id="4"] input').isChecked(), false);
         await page.locator('[data-list="old"] [data-id="4"] input').check();
         assert.equal(await page.locator('[data-action="target-operation"]').isDisabled(), false);
         await page.locator('[data-action="target-operation"]').click();

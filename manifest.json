@@ -4,7 +4,7 @@
   "dependencies": [],
   "js": "index.js",
   "author": "刘军峰",
-  "version": "1.13.2",
+  "version": "1.13.3",
   "homePage": "https://github.com/cjhkcjgk3-sys/st-worldbook-updater",
   "auto_update": false,
   "hooks": {
