@@ -543,6 +543,54 @@ export function buildBatchConsolidation(oldBook, newBook, groups, mode = 'conten
     return { ...removeMatchedTargets(data, allRemoved), updated, skipped, mergedGroups: groups.length };
 }
 
+export function planBatchMatchedDeletion(oldBook, newBook, {
+    sourceIds = [], workKeys = [], pairs = [],
+} = {}) {
+    validateBook(oldBook); validateBook(newBook);
+    const ids = [...new Set((sourceIds || []).map(String))];
+    if (!ids.length) throw new Error('请先在母本勾选要删除的基准条目，或填写定点名单。');
+    const pairBySource = new Map((pairs || []).map(pair => [String(pair.newId), String(pair.oldId)]));
+    const groups = [], missing = [], removedSet = new Set();
+    for (const newId of ids) {
+        if (!own(newBook.entries, newId)) throw new Error('母本基准条目已不存在，请重新载入。');
+        const source = newBook.entries[newId];
+        const matched = new Set(consolidationCandidates(oldBook, newBook, newId, workKeys));
+        const pairedOld = pairBySource.get(newId);
+        if (pairedOld && own(oldBook.entries, pairedOld) && compatibleEntryWorks(source, oldBook.entries[pairedOld], workKeys)) {
+            matched.add(pairedOld);
+        }
+        const oldIds = [...matched];
+        if (!oldIds.length) {
+            missing.push(title(source));
+            continue;
+        }
+        groups.push({ newId, name: title(source), oldIds });
+        for (const id of oldIds) removedSet.add(id);
+    }
+    return { groups, removedOldIds: [...removedSet], missing };
+}
+
+export function buildBatchMatchedDeletion(oldBook, newBook, groups, workKeys = []) {
+    validateBook(oldBook); validateBook(newBook);
+    if (!Array.isArray(groups) || !groups.length) throw new Error('没有可批量删除的目标条目。');
+    const removedSet = new Set();
+    for (const group of groups) {
+        const { newId, oldIds } = group ?? {};
+        if (!own(newBook.entries, String(newId))) throw new Error('母本基准条目已不存在，请重新载入。');
+        if (!Array.isArray(oldIds) || !oldIds.length) continue;
+        for (const id of oldIds) {
+            const oldId = String(id);
+            if (!own(oldBook.entries, oldId)) throw new Error('待删除的目标条目已不存在，请重新载入。');
+            if (!compatibleEntryWorks(newBook.entries[String(newId)], oldBook.entries[oldId], workKeys)) {
+                throw new Error('所选条目与母本作品标签不一致，已停止删除。');
+            }
+            removedSet.add(oldId);
+        }
+    }
+    if (!removedSet.size) throw new Error('没有可批量删除的目标条目。');
+    return removeMatchedTargets(clone(oldBook), [...removedSet]);
+}
+
 export function buildMatchedDeletion(oldBook, newBook, group, workKeys = []) {
     const { newId, oldIds } = group ?? {};
     if (!Array.isArray(oldIds) || !oldIds.length) throw new Error('请至少选择一条要移除的目标书条目。');

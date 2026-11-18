@@ -1124,6 +1124,24 @@ try {
         await ctx.close();
     }
 
+    reset(); {
+        const { page, ctx } = await prepare();
+        // 仅勾选母本「共同标题」(uid 91)，通过「批量匹配删除」一次删掉目标书里匹配的两条共同标题 (uid 1, 2)，保留其他条目
+        await page.locator('[data-list="new"] input[type="checkbox"]').evaluateAll(boxes => boxes.forEach(b => { if (b.checked) b.click(); }));
+        await page.locator('[data-list="new"] [data-id="91"] input').check();
+        await page.locator('.stwu-pairbar > summary').click();
+        await page.locator('[data-pair-btn="batch-delete"]').click();
+        await page.locator('[data-roster-dialog]').waitFor({ state: 'visible' });
+        assert.match(await page.locator('[data-roster-summary]').textContent(), /将从目标书删除 2 条匹配条目/);
+        await page.locator('[data-action="save-roster"]').click();
+        await page.waitForFunction(() => /^已核验并批量删除 2 条目标匹配条目/.test(document.querySelector('.stwu-notice').textContent));
+        assert.equal(state.books.get('演示_目标书').entries['1'], undefined);
+        assert.equal(state.books.get('演示_目标书').entries['2'], undefined);
+        assert.equal(state.books.get('演示_目标书').entries['4'].content, '保留内容');
+        results.push('按母本勾选批量匹配删除目标书对应条目并保留独有设定通过');
+        await ctx.close();
+    }
+
     const report = { pass: true, browser: await browser.version(), results };
     if (process.env.REPORT_FILE) await fs.writeFile(process.env.REPORT_FILE, JSON.stringify(report, null, 2) + '\n');
     console.log(JSON.stringify(report, null, 2));

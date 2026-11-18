@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoMatch, buildBatchConsolidation, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, planBatchConsolidation, scopeMatch, workKeysOf } from '../core.js';
+import { autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildRosterUpdate, buildUpdate, canonical, classifyIncoming, clone, consolidationCandidates, planBatchConsolidation, planBatchMatchedDeletion, scopeMatch, workKeysOf } from '../core.js';
 
 const e = (uid, comment, key, content = '正文', extra = {}) => ({ uid, comment, key, content, ...extra });
 const book = (...entries) => ({ entries: Object.fromEntries(entries.map(entry => [String(entry.uid), entry])) });
@@ -420,4 +420,25 @@ test('批量合并重复支持母本对目标 1:2 与 1:3 一次合并替换，�
     assert.ok(res.data.entries['7']);
     assert.ok(res.data.entries['8']);
     assert.deepEqual(autoMatch(res.data, mother).filter(p => ['10', '11'].includes(p.newId)).map(p => [p.oldId, p.newId]), [['1', '10'], ['3', '11']]);
+});
+
+test('批量匹配删除按母本勾选批量移除目标书对应条目（含1对多），保留未选中条目与独有设定', () => {
+    const mother = book(
+        e(10, '角色甲', ['角色甲'], '甲'),
+        e(11, '角色乙', ['角色乙'], '乙'),
+        e(12, '未选中角色', ['未选中'], '保留'),
+    );
+    const target = book(
+        e(1, '角色甲', ['角色甲'], '旧甲1'),
+        e(2, '角色甲', ['角色甲'], '旧甲2'),
+        e(3, '角色乙', ['角色乙'], '旧乙'),
+        e(4, '未选中角色', ['未选中'], '保留'),
+        e(5, '世界观设定', ['世界观'], '保留设定'),
+    );
+    const plan = planBatchMatchedDeletion(target, mother, { sourceIds: ['10', '11'] });
+    assert.deepEqual(plan.removedOldIds.sort(), ['1', '2', '3']);
+    const res = buildBatchMatchedDeletion(target, mother, plan.groups);
+    assert.equal(res.removed, 3);
+    assert.deepEqual(Object.keys(res.data.entries).sort(), ['4', '5']);
+    assert.equal(res.data.entries['5'].content, '保留设定');
 });
