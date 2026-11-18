@@ -36,12 +36,17 @@ test('普通更新模式拒绝隐式新增；全部取消时完全不改变原�
     assert.deepEqual(result.data, old); assert.equal(result.added, 0);
 });
 
-test('共享或部分重叠关键词、重名和无身份信息均留待处理', () => {
-    const old = book(e(0, 'A', ['共同', 'a']));
-    const source = book(e(8, '新名称', ['共同']), e(9, 'A', ['不同']), e(10, '', []), e(11, '独立', ['独立']));
-    const states = classifyIncoming(old, source, []);
-    assert.equal(states.get('8'), 'review'); assert.equal(states.get('9'), 'review');
+test('共享普通关键词各自独立，重名、目标主关键词明确写有全名和缺身份信息仍待核对', () => {
+    const old = book(e(0, 'A', ['共同', 'a']), e(1, '另外的名称', ['已知全名']));
+    const source = book(e(8, '新名称', ['共同']), e(9, 'A', ['不同']), e(10, '', []), e(11, '独立', ['独立']), e(12, '已知全名', []));
+    const targets = new Set(), reasons = new Map();
+    const states = classifyIncoming(old, source, [], targets, reasons);
+    assert.equal(states.get('8'), 'new'); assert.equal(states.get('9'), 'review');
     assert.equal(states.get('10'), 'review'); assert.equal(states.get('11'), 'new');
+    assert.equal(states.get('12'), 'review');
+    assert.deepEqual(targets, new Set(['0', '1']));
+    assert.match(reasons.get('10'), /母本缺少/);
+    assert.match(reasons.get('12'), /另外的名称/);
 });
 
 test('不同标题只重合一个字时，不自动配对，也不进入待核对', () => {
@@ -60,8 +65,21 @@ test('不同标题只重合一个字时，不自动配对，也不进入待核�
     }
 });
 
+test('目标书无对应标题时，通用词甚至整组主关键词相同也不制造候选', () => {
+    const keywords = ['角色', '五星角色', '剧情'];
+    const target = book(e(0, '其他角色', keywords), e(1, '剧情', ['故事']));
+    const mother = book(e(8, '刻律德菈', keywords), e(9, '凯撒·金 (Caesar King)', keywords));
+    const reviewTargets = new Set(), reasons = new Map();
+    assert.deepEqual([...classifyIncoming(target, mother, [], reviewTargets, reasons)], [['8', 'new'], ['9', 'new']]);
+    assert.equal(reviewTargets.size + reasons.size, 0);
+    const plan = buildRosterUpdate(target, mother, [['刻律德菈'], ['凯撒·金']], 'content');
+    assert.deepEqual(plan.review, []);
+    assert.equal(plan.result.updated, 0);
+    assert.equal(plan.result.added, 2);
+});
+
 test('待处理条目须明确标记新增，不能被普通全选偷偷追加', () => {
-    const old = book(e(0, 'A', ['相同关键词'])), source = book(e(8, '新段落', ['相同关键词'], '不同内容'));
+    const old = book(e(0, 'A', ['新段落'])), source = book(e(8, '新段落', ['相同关键词'], '不同内容'));
     assert.throws(() => buildUpdate(old, source, [], 'content', { merge: true, additions: ['8'] }), /待处理/);
     const result = buildUpdate(old, source, [], 'content', { merge: true, additions: ['8'], approvedNew: ['8'] });
     assert.equal(result.added, 1); assert.equal(result.data.entries[0].comment, 'A');

@@ -137,7 +137,7 @@ test('名单识别两侧别名，缺失、重名和争抢目标的条目等待�
         { ...row(0, 'Alpha', ['甲的特征']), order: 42 },
         row(1, '丙', ['丙的特征']), row(2, '丙', ['丙的特征']),
         row(3, '丁（戊）', ['丁的特征', '戊的特征']), row(4, '既有条目', ['庚某', '庚的特征']),
-        row(5, '另一标题', ['专属关键词']),
+        row(5, '', ['专属关键词']),
     ]);
     const { groups } = parseNameList('甲=Alpha\n乙\n丙\n丁\n戊\n己\n庚某\n辛某\n缺失', { includeGroups: true });
     const { reviewRows } = matchRosterEntries(target, mother, groups);
