@@ -65,6 +65,22 @@ test('不同标题只重合一个字时，不自动配对，也不进入待核�
     }
 });
 
+test('正好等于全名首段的单字条目缺少主关键词时待核对，不能当作缺失条目复制', () => {
+    for (const [sourceTitle, targetTitle] of [['琴·古恩希尔德', '琴'], ['琴', '琴·古恩希尔德'], ['琴·古恩希尔德', '琴（Jean）']]) {
+        const source = book(e(8, sourceTitle, [], '母本正文'));
+        const target = book(e(0, targetTitle, [], '目标书正文'));
+        const targets = new Set(), reasons = new Map();
+        assert.deepEqual(autoMatch(target, source), []);
+        assert.equal(classifyIncoming(target, source, [], targets, reasons).get('8'), 'review');
+        assert.deepEqual([...targets], ['0']);
+        assert.match(reasons.get('8'), /单字简称缺少主关键词佐证/);
+        assert.throws(() => buildUpdate(target, source, [], 'content', { merge: true, additions: ['8'] }), /待处理/);
+        const roster = buildRosterUpdate(target, source, [[sourceTitle]], 'content');
+        assert.equal(roster.result.added + roster.result.updated, 0);
+        assert.match(roster.review[0], /单字简称缺少主关键词佐证/);
+    }
+});
+
 test('目标书无对应标题时，通用词甚至整组主关键词相同也不制造候选', () => {
     const keywords = ['角色', '五星角色', '剧情'];
     const target = book(e(0, '其他角色', keywords), e(1, '剧情', ['故事']));
@@ -150,6 +166,20 @@ test('新增同步角色书导出数据，重分配 id/uid 并保留未知导出
     assert.equal(portable.extensions.depth, 6); assert.equal(portable.extensions.display_index, native.displayIndex);
     assert.equal(portable.enabled, false); assert.equal(portable.private, '保留'); assert.equal(portable.extensions.custom, true);
     assert.equal(result.data.originalData.name, '原导出名称');
+});
+
+test('复制时保留目标书导出镜像中的空项，并读取母本有编号的镜像', () => {
+    const old = book(e(0, '已有条目', ['已有条目']));
+    old.originalData = { entries: [null, { id: 1, content: '其他导出记录' }] };
+    const source = book(e(8, '新增条目', ['新增条目'], '新正文'));
+    source.originalData = { entries: [null, { id: 8, content: '旧镜像正文', private: '保留' }] };
+    const { data, addedPairs } = buildUpdate(old, source, [], 'content', { merge: true, additions: ['8'] });
+    assert.equal(addedPairs[0].oldId, '2');
+    assert.deepEqual(data.originalData.entries.slice(0, 2), old.originalData.entries);
+    assert.equal(data.originalData.entries[2].id, 2);
+    assert.equal(data.originalData.entries[2].content, '新正文');
+    assert.equal(data.originalData.entries[2].private, '保留');
+    assert.equal(source.originalData.entries[0], null);
 });
 
 test('配对与新增互斥，重复选择、失效编号和非法范围均拒绝', () => {

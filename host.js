@@ -97,18 +97,18 @@ export class WorldbookService {
     }
 
     /** 核对读取快照后保存新数据，并回读核验。 */
-    async updateDirect(name, expected, next) {
+    async updateDirect(name, expected, next, source) {
         if (this.busy) throw new Error('当前操作尚未结束。');
         this.busy = true;
         try {
             validateBook(next);
             const before = await this.assertCurrent(name, expected);
             if (canonical(before) === canonical(next)) return { data: before, changed: false, note: '内容相同，无需写入。' };
-            return await this.saveVerified(name, before, next);
+            return await this.saveVerified(name, before, next, source);
         } finally { this.busy = false; }
     }
 
-    async saveVerified(name, before, intended) {
+    async saveVerified(name, before, intended, source) {
         if (this.disabled) throw new Error('插件已关闭，尚未写入。');
         this.checkEditor(name);
         let cache;
@@ -128,6 +128,7 @@ export class WorldbookService {
         if (this.disabled) throw new Error('插件已关闭，尚未写入。');
         this.checkEditor(name);
         this.assertCacheUnchanged(cache, name, cacheBefore, false);
+        if (source) await this.assertCurrent(source.name, source.data);
         await this.assertCurrent(name, before);
         if (this.disabled) throw new Error('插件已关闭，尚未写入。');
         this.checkEditor(name);

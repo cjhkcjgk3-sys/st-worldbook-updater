@@ -1,10 +1,10 @@
-const VERSION = '1.13.0';
+const VERSION = '1.13.1';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
-const settingsIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
+const entryIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -500,25 +500,54 @@ export class UpdaterWindow {
 
     async reload() {
         this.message('正在读取世界书列表…');
-        this.books = await this.service.list();
-        if (this.oldName) {
-            const previous = this.oldBook;
-            this.oldBook = null;
-            if (this.books.some(x => x.name === this.oldName)) this.oldBook = await this.service.read(this.oldName);
-            else this.oldName = '';
-            if (previous && this.oldBook) {
-                const unchanged = id => settingsIdentity(previous.entries[id]) === settingsIdentity(this.oldBook.entries[id]);
-                for (const id of this.targetChecks) if (!unchanged(id)) this.targetChecks.delete(id);
-                if (!unchanged(this.selectedOld)) this.selectedOld = null;
-            }
-        }
-        if (this.sourceKind === 'book' && this.newName) {
-            this.newBook = null;
-            if (this.books.some(x => x.name === this.newName)) this.newBook = await this.service.read(this.newName);
-            else this.newName = '';
-        }
+        const books = await this.service.list();
+        const names = new Set(books.map(book => book.name));
+        const oldName = names.has(this.oldName) ? this.oldName : '';
+        const fromFile = this.sourceKind === 'file';
+        const newName = fromFile || names.has(this.newName) ? this.newName : '';
+        const target = oldName ? this.service.read(oldName) : null;
+        const source = fromFile ? this.newBook : !newName ? null : newName === oldName ? target : this.service.read(newName);
+        const [oldBook, newBook] = await Promise.all([target, source]);
+        const discarded = this.reconcileReload(oldBook, newBook);
+        Object.assign(this, { books, oldBook, newBook, oldName, newName });
         this.repair(); this.selectors();
-        this.message(this.oldBook && this.newBook ? `已重新载入，自动配对 ${this.pairs.length} 组。` : '请选择母本和目标书。母本也可以从 JSON 文件打开。');
+        const status = this.oldBook && this.newBook
+            ? `已重新载入，自动配对 ${this.pairs.length} 组。`
+            : '请选择母本和目标书。母本也可以从 JSON 文件打开。';
+        const note = discarded ? `有 ${discarded} 组旧配对因标题或主关键词变化已重新核对，相关勾选已清除。` : '';
+        this.message(status + note);
+    }
+
+    reconcileReload(oldBook, newBook) {
+        const unchanged = (before, after, id) => {
+            const original = before?.entries[id], current = after?.entries[id];
+            return original && current && entryIdentity(original) === entryIdentity(current);
+        };
+        const oldUnchanged = id => unchanged(this.oldBook, oldBook, id);
+        const newUnchanged = id => unchanged(this.newBook, newBook, id);
+        const retained = this.pairs.filter(pair => {
+            if (oldUnchanged(pair.oldId) && newUnchanged(pair.newId)) return true;
+            this.pairChecks.delete(pair.newId);
+            this.newSelection.delete(pair.newId);
+            return false;
+        });
+        const discarded = this.pairs.length - retained.length;
+        this.pairs = retained;
+        for (const checks of [this.targetChecks, this.unpairedOld]) {
+            for (const id of checks) if (!oldUnchanged(id)) checks.delete(id);
+        }
+        for (const checks of [this.newSelection, this.pairChecks, this.unpairedNew]) {
+            for (const id of checks.keys()) if (!newUnchanged(id)) checks.delete(id);
+        }
+        if (this.selectedOld != null && !oldUnchanged(this.selectedOld)) {
+            this.selectedOld = null;
+            this.lastSelectedSide = null;
+        }
+        if (this.selectedNew != null && !newUnchanged(this.selectedNew)) {
+            this.selectedNew = null;
+            this.lastSelectedSide = null;
+        }
+        return discarded;
     }
 
     async loadSide(side, value) {
@@ -695,9 +724,11 @@ export class UpdaterWindow {
         const all = Object.keys(entries);
         if (scope === 'all') return all;
         if (scope === 'scope') {
-            if (!this.scopeNames.length) return [];
-            if (!target) return all.filter(id => this.inScope(id));
-            return this.resolvedRoster()?.pairs.map(pair => pair.oldId) ?? [];
+            if (!this.newBook || !this.scopeGroups.length) return [];
+            const roster = this.resolvedRoster();
+            if (target) return roster?.pairs.map(pair => pair.oldId) ?? [];
+            const { states } = roster ?? matchRosterEntries({ entries: {} }, this.newBook, this.scopeGroups, { workKeys: this.scopeWorkKeys });
+            return all.filter(id => states.has(id) && states.get(id) !== 'review');
         }
         return scope === 'checked' ? all.filter(id => target ? this.isTargetChecked(id) : this.isEntryChecked(id)) : [];
     }
@@ -709,19 +740,30 @@ export class UpdaterWindow {
         return pairs.filter(pair => sourceIds.has(pair.newId));
     }
 
+    settingsSyncPlan(ids) {
+        const keys = this.settingsFields().filter(field => field.mode).map(field => field.key);
+        const pairs = this.settingsSyncPairs(ids);
+        const updates = keys.length ? pairs.map(pair => ({ pair, values: pickSettings(this.newBook.entries[pair.newId], keys) }))
+            .filter(({ values }) => Object.keys(values).length) : [];
+        return { keys, pairs, updates };
+    }
+
     renderSettingsInfo() {
         const count = this.find('[data-set-count]');
         if (!count) return;
         const operation = this.find('[data-set-operation]').value;
         const sync = operation === 'sync', target = operation === 'old';
         const ids = this.settingsIds(target ? 'old' : 'new');
-        const affected = sync ? this.settingsSyncPairs(ids).length : ids.length;
+        const plan = sync ? this.settingsSyncPlan(ids) : null;
+        const affected = plan ? (plan.keys.length ? plan.updates.length : plan.pairs.length) : ids.length;
         count.textContent = `${target ? '目标书' : '母本'} ${ids.length} 条${sync ? ` · 可同步 ${affected} 条` : ''}`;
         const file = operation === 'new' && this.sourceKind === 'file';
         const emptySearch = this.find('[data-set-scope]').value === 'search'
             && !this.find(`[data-search="${target ? 'old' : 'new'}"]`).value.trim();
+        const missingValues = plan?.keys.length && plan.pairs.length && !affected;
         this.find('[data-set-hint]').textContent = emptySearch
             ? `先在${target ? '目标书' : '母本'}输入搜索词。`
+            : missingValues ? '母本里没有对应的设置值可同步。'
             : sync
             ? '选中要同步的字段，按母本现有值写入已配对的目标条目。'
             : file ? '母本来自 JSON 文件。选择酒馆内的母本即可保存设置。'
@@ -755,7 +797,11 @@ export class UpdaterWindow {
             const changed = applySettingsPatch(next.entries[id], patch);
             setBookEntrySettings(next, id, pickSettings(changed, keys));
         }
-        const saved = await this.service.updateDirect(name, book, next);
+        const byRoster = this.find('[data-set-scope]').value === 'scope';
+        const dependency = byRoster && !target && this.oldBook ? { name: this.oldName, data: this.oldBook } : undefined;
+        const saved = byRoster && target
+            ? await this.saveTargetFromMother(next)
+            : await this.service.updateDirect(name, book, next, dependency);
         if (target || this.sameNamedBook()) this.oldBook = saved.data;
         if (!target || this.sameNamedBook()) this.newBook = saved.data;
         this.changeCache.clear(); this.invalidateIncoming();
@@ -765,12 +811,9 @@ export class UpdaterWindow {
 
     async syncSettingsToTarget() {
         if (!this.oldBook || !this.newBook) { this.message('先选择母本和目标书。', true); return; }
-        const keys = this.settingsFields().filter(field => field.mode).map(field => field.key);
+        const { keys, pairs, updates } = this.settingsSyncPlan(this.settingsIds());
         if (!keys.length) { this.message('先选一个要同步的设置字段。', true); return; }
-        const pairs = this.settingsSyncPairs(this.settingsIds());
         if (!pairs.length) { this.message('当前范围没有可同步的配对条目。', true); return; }
-        const updates = pairs.map(pair => ({ pair, values: pickSettings(this.newBook.entries[pair.newId], keys) }))
-            .filter(({ values }) => Object.keys(values).length);
         if (!updates.length) { this.message('母本里没有对应的设置值可同步。', true); return; }
         const summary = keys.map(key => SETTINGS_FIELDS.find(field => field.key === key)?.label ?? key).join('、');
         const scope = this.find('[data-set-scope]').selectedOptions[0].textContent;
@@ -781,7 +824,7 @@ export class UpdaterWindow {
         this.message('正在同步设置…');
         const next = clone(this.oldBook);
         for (const { pair, values } of updates) setBookEntrySettings(next, pair.oldId, values);
-        const saved = await this.service.updateDirect(this.oldName, this.oldBook, next);
+        const saved = await this.saveTargetFromMother(next);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.invalidateIncoming();
@@ -1224,7 +1267,7 @@ export class UpdaterWindow {
         const skipNote = result.skipped ? `无变化 ${result.skipped} 组将跳过。\n` : '';
         if (!globalThis.confirm(`将用母本「${this.newName}」的内容替换目标书「${this.oldName}」中已配对的 ${result.updated} 条条目。\n${scopeNote}替换范围：${scope}。\n${hiddenNote}${skipNote}确认继续？`)) return;
         this.message('正在保存并核验目标书…');
-        const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
+        const saved = await this.saveTargetFromMother(result.data);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.changeCache.clear();
@@ -1259,7 +1302,7 @@ export class UpdaterWindow {
         const more = result.added > 12 ? `\n- 另有 ${result.added - 12} 条` : '';
         if (!globalThis.confirm([`将从母本「${this.newName}」向目标书「${this.oldName}」复制以下 ${result.added} 条缺失条目：\n${names}${more}`, skipped, notes, '确认继续？'].filter(Boolean).join('\n'))) return;
         this.message('正在向目标书复制条目并核验…');
-        const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
+        const saved = await this.saveTargetFromMother(result.data);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.changeCache.clear();
@@ -1276,6 +1319,11 @@ export class UpdaterWindow {
 
     sameNamedBook() {
         return this.sourceKind === 'book' && this.oldName === this.newName;
+    }
+
+    saveTargetFromMother(next, { target = this.oldName, before = this.oldBook, mother = this.newBook } = {}) {
+        const source = this.sourceKind === 'book' ? { name: this.newName, data: mother } : undefined;
+        return this.service.updateDirect(target, before, next, source);
     }
 
     openTargetOperation() {
@@ -1359,7 +1407,7 @@ export class UpdaterWindow {
             ? buildMatchedDeletion(before, mother, { newId, oldIds }, this.scopeWorkKeys)
             : buildConsolidation(before, mother, { newId, oldId: retained, duplicateOldIds: oldIds }, mode, this.scopeWorkKeys);
         this.message('正在保存并核验目标书…');
-        const saved = await this.service.updateDirect(target, before, result.data);
+        const saved = await this.saveTargetFromMother(result.data, operation);
         this.oldBook = saved.data;
         const removed = new Set(result.removedOldIds);
         this.pairs = this.pairs.filter(pair => !removed.has(pair.oldId)
@@ -1420,7 +1468,7 @@ export class UpdaterWindow {
         const { result } = plan;
         if (!(result.updated || result.added)) return;
         this.message('正在写入并核验目标书…');
-        const saved = await this.service.updateDirect(preview.target, preview.before, result.data);
+        const saved = await this.saveTargetFromMother(result.data, preview);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.pairs.push(...result.addedPairs);

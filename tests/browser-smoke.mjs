@@ -598,6 +598,60 @@ try {
         await ctx.close();
     }
 
+    for (const side of ['old', 'new']) {
+        reset();
+        const { page, ctx, errors } = await prepare();
+        const role = side === 'old' ? '目标书' : '母本';
+        const name = `演示_${role}`;
+        const id = side === 'old' ? 1 : 91;
+        const row = (rowSide, rowId) => page.locator(`[data-list="${rowSide}"] [data-id="${rowId}"]`);
+        const status = (rowSide, rowId) => row(rowSide, rowId).locator('.stwu-entry-status').textContent();
+        async function reload() {
+            await page.locator('.stwu-header-actions [data-action="reload"]').click();
+            await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已重新载入'));
+        }
+
+        await clickRow(page, 'old', '1');
+        await clickRow(page, 'new', '91');
+        await openTool(page, 'stwu-pairbar');
+        await page.getByRole('button', { name: '配对所选', exact: true }).click();
+        assert.match(await status('old', 1), /配对 \d+ · 有变化/);
+        const edited = structuredClone(state.books.get(name));
+        Object.assign(edited.entries[id], { content: '宿主更新的原条目正文', order: 61 });
+        state.books.set(name, edited);
+        await reload();
+        assert.doesNotMatch(await page.locator('.stwu-notice').textContent(), /重新核对/);
+        assert.match(await status('old', 1), /配对 \d+ · 有变化/);
+        assert.equal(await status('new', 91), await status('old', 1));
+        assert.equal(await row('old', 1).locator('input').isChecked(), true);
+        assert.equal(await row('new', 91).locator('input').isChecked(), true);
+
+        const replaced = structuredClone(edited);
+        replaced.entries[id] = entry(id, '外部编辑后复用编号的另一身份', ['另一身份'], '不属于原配对的正文');
+        state.books.set(name, replaced);
+        await reload();
+        assert.match(await page.locator('.stwu-notice').textContent(), /有 1 组旧配对因标题或主关键词变化已重新核对/);
+        assert.equal(await row(side, id).locator('input').isChecked(), false);
+        const expectedStatus = side === 'old' ? '目标书独有 · 保留' : '未配对 · 可复制';
+        assert.equal(await status(side, id), expectedStatus);
+        if (side === 'old') {
+            assert.match(await status('old', 2), /配对 \d+ · 有变化/);
+            assert.equal(await status('new', 91), await status('old', 2));
+        }
+        assert.equal(await page.locator('[data-action="copy"]').isDisabled(), true);
+        assert.equal(state.writes, 0);
+        const untouched = structuredClone(state.books.get('演示_目标书').entries[1]);
+        page.once('dialog', dialog => dialog.accept());
+        await page.locator('[data-action="replace"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验并替换'));
+        assert.equal(state.writes, 1);
+        assert.deepEqual(state.books.get('演示_目标书').entries[1], untouched);
+        assert.equal(state.books.get('演示_目标书').entries[0].content, newer.entries[90].content);
+        assert.deepEqual(errors, []);
+        results.push(`${role}重载时正文设置变化保留人工配对，复用 UID 的另一身份不继承勾选和替换关系`);
+        await ctx.close();
+    }
+
     reset(); {
         state.books.set('另一母本', book([entry(90, '其他母本条目', ['其他母本'], '其他正文')]));
         state.books.set('另一目标书', book([entry(2, '同编号的其他条目', ['另一身份'], '其他正文')]));
@@ -768,23 +822,44 @@ try {
         assert.equal(await dialog.isVisible(), false);
         assert.equal(await page.locator('.stwu-dialog').isVisible(), true);
         await previewButton.click();
+        const externalTarget = structuredClone(state.books.get('演示_目标书'));
+        externalTarget.entries[4].content = '名单预览后在宿主修改的正文';
+        state.books.set('演示_目标书', externalTarget);
+        await confirm.click();
+        await page.waitForFunction(() => /预览后.*变化/.test(document.querySelector('.stwu-notice').textContent));
+        assert.equal(state.writes, 0);
+        assert.deepEqual(state.books.get('演示_目标书'), externalTarget);
+        await page.locator('.stwu-header-actions [data-action="reload"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已重新载入'));
+        await previewButton.click();
+        const externalMother = structuredClone(motherBefore);
+        externalMother.entries[90].content = '名单预览后在宿主修改的母本正文';
+        state.books.set('演示_母本', externalMother);
+        await confirm.click();
+        await page.waitForFunction(() => /演示_母本.*在预览后发生了变化/.test(document.querySelector('.stwu-notice').textContent));
+        assert.equal(state.writes, 0);
+        assert.deepEqual(state.books.get('演示_目标书'), externalTarget);
+        await page.locator('.stwu-header-actions [data-action="reload"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已重新载入'));
+        await previewButton.click();
         await confirm.click();
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换 1 条，复制 1 条'));
         assert.equal(state.writes, 1);
         const target = state.books.get('演示_目标书');
         assert.equal(target.entries[0].comment, '琴');
-        assert.equal(target.entries[0].content, newer.entries[90].content);
+        assert.equal(target.entries[0].content, externalMother.entries[90].content);
         assert.equal(target.entries[0].order, 100);
         assert.equal(target.entries[100].content, '乐器条目');
         assert.equal(target.entries[1].content, old.entries[1].content);
+        assert.equal(target.entries[4].content, externalTarget.entries[4].content);
         assert.equal(Object.values(target.entries).filter(row => row.comment === '新增条目').length, 1);
-        assert.deepEqual(state.books.get('演示_母本'), motherBefore);
+        assert.deepEqual(state.books.get('演示_母本'), externalMother);
         await previewButton.click();
         assert.match(await dialog.locator('[data-roster-summary]').textContent(), /替换 0 · 复制 0 · 无变化 3/);
         assert.equal(await confirm.isVisible(), false);
         assert.equal(state.writes, 1);
         assert.deepEqual(errors, []);
-        results.push('320px 用主关键词区分单字同名，琴配对、预览、写入及重复执行通过');
+        results.push('320px 按主关键词区分同名琴，双方外部变化后拒绝旧名单预览，重载后按新母本写入且无副本');
         await ctx.close();
     }
 

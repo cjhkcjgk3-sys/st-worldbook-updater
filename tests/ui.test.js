@@ -187,6 +187,32 @@ test('independent left and right selection re-pairs two existing automatic match
     assert.equal(ui.pairs[0].newId, '11');
 });
 
+test('a failed reload retains a coherent snapshot and a retry drops a manual pair to a reused UID', async () => {
+    const { ui } = setup();
+    ui.selectedOld = '2';
+    ui.selectedNew = '13';
+    ui.manualPair();
+    const originalTarget = ui.oldBook, originalMother = ui.newBook;
+    const changedTarget = structuredClone(originalTarget);
+    changedTarget.entries['2'] = entry(2, 'Reused UID', 'protected content');
+    ui.service.list = async () => [{ name: 'target' }, { name: 'mother' }];
+    ui.service.read = async name => {
+        if (name === 'target') return changedTarget;
+        throw new Error('temporary read failure');
+    };
+    ui.selectors = () => {};
+    await assert.rejects(ui.reload(), /temporary read failure/);
+    assert.equal(ui.oldBook, originalTarget);
+    assert.equal(ui.newBook, originalMother);
+    assert.equal(ui.pairForSource('13').oldId, '2');
+    ui.service.read = async name => name === 'target' ? changedTarget : structuredClone(originalMother);
+    await ui.reload();
+    assert.equal(ui.pairForSource('13'), undefined);
+    assert.equal(ui.isEntryChecked('13'), false);
+    assert.equal(ui.selectedOld, null);
+    assert.match(ui.lastMessage, /1 组旧配对/);
+});
+
 test('replacing a previous manual decision requires confirmation', async () => {
     const { ui } = setup();
     ui.selectedOld = '2'; ui.selectedNew = '13'; ui.manualPair();
@@ -291,8 +317,10 @@ test('mother settings use current, checked, scoped and all source IDs, with mirr
     ui.newSelection.set('11', true);
     ui.newSelection.set('13', true);
     assert.deepEqual(ui.settingsIds(), ['11', '13']);
-    ui.scopeNames = ['Alice']; nodes['[data-set-scope]'].value = 'scope';
-    assert.deepEqual(ui.settingsIds(), ['10', '12']);
+    nodes['[data-scope]'].value = 'Bob\nNew';
+    ui.applyScope();
+    nodes['[data-set-scope]'].value = 'scope';
+    assert.deepEqual(ui.settingsIds(), ['11', '13']);
     nodes['[data-set-scope]'].value = 'all'; assert.equal(ui.settingsIds().length, 4);
     nodes['[data-set-scope]'].value = 'checked';
     ui.collectSettingsPatch = () => ({ constant: { mode: 'set', value: true }, depth: { mode: 'set', value: 4 } });
@@ -307,6 +335,30 @@ test('mother settings use current, checked, scoped and all source IDs, with mirr
     });
 });
 
+test('mother roster settings exclude unresolved names with or without a target, while checked scope can still use them', async () => {
+    for (const withTarget of [true, false]) {
+        const { ui, nodes } = setup();
+        if (!withTarget) ui.oldBook = null;
+        nodes['[data-scope]'].value = 'Alice\nBob\nNew';
+        ui.applyScope();
+        nodes['[data-set-scope]'].value = 'scope';
+        assert.deepEqual(ui.settingsIds('new'), ['11', '13']);
+        assert.deepEqual(ui.settingsIds('old'), withTarget ? ['1'] : []);
+        ui.collectSettingsPatch = () => ({ depth: { mode: 'set', value: 7 } });
+        await withConfirm(true, async calls => {
+            await ui.applySettings('new');
+            assert.match(calls[0], /母本「mother」的 2 条/);
+            assert.equal(ui.newBook.entries['10'].depth, undefined);
+            assert.equal(ui.newBook.entries['12'].depth, undefined);
+            assert.equal(ui.newBook.entries['11'].depth, 7);
+            assert.equal(ui.newBook.entries['13'].depth, 7);
+        });
+        ui.newSelection.set('10', true);
+        nodes['[data-set-scope]'].value = 'checked';
+        assert.ok(ui.settingsIds('new').includes('10'));
+    }
+});
+
 test('sync settings only uses specified source IDs and updates target export mirror', async () => {
     const { ui, nodes } = setup();
     ui.oldBook.originalData = { entries: Object.values(ui.oldBook.entries).map(item => ({ id: item.uid, content: item.content, extensions: {} })) };
@@ -319,6 +371,36 @@ test('sync settings only uses specified source IDs and updates target export mir
         await ui.syncSettingsToTarget();
         assert.equal(ui.oldBook.entries['1'].depth, 8);
         assert.equal(ui.oldBook.originalData.entries.find(item => item.id === 1).extensions.depth, 8);
+        assert.equal(ui.oldBook.entries['0'].depth, undefined);
+    });
+});
+
+test('sync settings preview and confirmation count only pairs with the selected saved fields', async () => {
+    const { ui, nodes } = setup();
+    Object.assign(nodes, {
+        '[data-set-operation]': { value: 'sync' },
+        '[data-set-count]': {},
+        '[data-set-hint]': {},
+        '[data-action="apply-settings"]': {},
+    });
+    ui.dialog = { querySelectorAll: () => [] };
+    ui.newBook.entries['11'].depth = 8;
+    nodes['[data-set-scope]'].value = 'all';
+    ui.settingsFields = () => [];
+    ui.renderSettingsInfo();
+    assert.match(nodes['[data-set-count]'].textContent, /可同步 2 条/);
+    ui.settingsFields = () => [{ key: 'order', mode: 'set', value: '' }];
+    ui.renderSettingsInfo();
+    assert.match(nodes['[data-set-count]'].textContent, /可同步 0 条/);
+    assert.equal(nodes['[data-action="apply-settings"]'].disabled, true);
+    assert.match(nodes['[data-set-hint]'].textContent, /没有对应的设置值/);
+    ui.settingsFields = () => [{ key: 'depth', mode: 'set', value: '' }];
+    ui.renderSettingsInfo();
+    assert.match(nodes['[data-set-count]'].textContent, /可同步 1 条/);
+    await withConfirm(true, async calls => {
+        await ui.syncSettingsToTarget();
+        assert.match(calls[0], /1 条配对条目.*\n.*1 条缺少所选字段/);
+        assert.equal(ui.oldBook.entries['1'].depth, 8);
         assert.equal(ui.oldBook.entries['0'].depth, undefined);
     });
 });
