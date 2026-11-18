@@ -465,6 +465,17 @@ test('简繁体角色名与主关键词自动对齐，并支持目标书内部�
     assert.equal(deduped.data.entries['3'], undefined);
     assert.ok(deduped.data.entries['2']);
 
+    // 覆盖「瑪→玛」「婭→娅」「薩→萨」等角色名高频繁体字
+    const flowerMother = book(e(20, '娜布·玛莉卡塔', ['娜布·玛莉卡塔', '花神'], '新版花神'));
+    const flowerTarget = book(
+        e(21, '娜布·玛莉卡塔', ['娜布·玛莉卡塔', '花神'], '简体旧版'),
+        e(22, '娜布·瑪莉卡塔', ['娜布·瑪莉卡塔', '花神'], '繁体旧版'),
+    );
+    const flowerBatch = planBatchConsolidation(flowerTarget, flowerMother);
+    assert.equal(flowerBatch.groups.length, 1);
+    assert.deepEqual(flowerBatch.groups[0].duplicateOldIds, ['22']);
+    assert.equal(planTargetSelfDuplicates(flowerTarget).groups.length, 1);
+
     const diff = diffLines('第一行\n旧第二行\n第三行', '第一行\n新第二行\n第三行\n第四行');
     assert.deepEqual(diff, [
         { type: 'same', text: '第一行' },
