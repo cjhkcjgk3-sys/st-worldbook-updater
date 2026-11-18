@@ -1,7 +1,7 @@
-const VERSION = '1.13.4';
+const VERSION = '1.13.5';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, planBatchMatchedDeletion, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
 const entryIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
@@ -113,6 +113,7 @@ export class UpdaterWindow {
                     <button type="button" class="menu_button" data-pair-btn="unpair-all">全部解除</button>
                     <button type="button" class="menu_button" data-pair-btn="consolidate">合并或删除目标条目</button>
                     <button type="button" class="menu_button" data-pair-btn="batch-consolidate">批量合并重复</button>
+                    <button type="button" class="menu_button" data-pair-btn="batch-delete">批量匹配删除</button>
                     <button type="button" class="menu_button" data-action="swap-sides">交换左右</button>
                   </div>
                   <span class="stwu-pairhint">点击两侧条目后，可在此配对或解除</span>
@@ -290,11 +291,14 @@ export class UpdaterWindow {
             if (action === 'close-roster') {
                 this.rosterPreview = null;
                 this.batchConsolidationPreview = null;
+                this.batchDeletionPreview = null;
                 this.find('[data-roster-dialog]').close();
             }
             if (action === 'save-roster') {
                 this.find('[data-roster-dialog]').close();
-                this.run(() => this.batchConsolidationPreview ? this.saveBatchConsolidation() : this.saveRoster());
+                this.run(() => this.batchDeletionPreview
+                    ? this.saveBatchDeletion()
+                    : this.batchConsolidationPreview ? this.saveBatchConsolidation() : this.saveRoster());
             }
             if (action === 'close-consolidation') {
                 this.targetOperation = null;
@@ -365,6 +369,7 @@ export class UpdaterWindow {
                 }
                 this.updateSelectionRows(sourceId, event.target.checked);
                 this.renderSelectionSummary();
+                this.renderPairControls();
                 if (this.find('.stwu-settings').open && this.find('[data-set-scope]').value === 'checked') this.renderSettingsInfo();
             });
         }
@@ -492,6 +497,7 @@ export class UpdaterWindow {
         else if (action === 'unpair-all') this.unpairAll();
         else if (action === 'consolidate') this.run(() => this.openTargetOperation());
         else if (action === 'batch-consolidate') this.run(() => this.previewBatchConsolidation());
+        else if (action === 'batch-delete') this.run(() => this.previewBatchDeletion());
         else if (action === 'auto') { this.repair(); this.message(`已重新自动匹配，共 ${this.pairs.length} 组；保留人工配对、解除和勾选。`); this.render(); }
         else if (action === 'auto-reset' && globalThis.confirm('将清除人工配对、解除记录及当前勾选，重新自动匹配。确认？')) {
             this.resetPairDecisions(); this.repair(); this.message(`已重置配对决定，自动匹配 ${this.pairs.length} 组。`); this.render();
@@ -1282,6 +1288,7 @@ export class UpdaterWindow {
         const canTargetOp = !this.busy && !!this.oldBook && !this.service.requiresReload && (hasMotherMatch || hasTargetSelection || (ready && !this.sameNamedBook()));
         setDisabled('consolidate', !canTargetOp);
         setDisabled('batch-consolidate', !ready || this.service.requiresReload || this.sameNamedBook());
+        setDisabled('batch-delete', !ready || this.service.requiresReload || this.sameNamedBook() || (!this.selectedSourceIds().length && !this.scopeNames.length));
         const targetOpBtn = this.find('[data-action="target-operation"]');
         if (targetOpBtn) targetOpBtn.disabled = !canTargetOp;
         const hint = this.find('.stwu-pairbar .stwu-pairhint');
@@ -1530,6 +1537,7 @@ export class UpdaterWindow {
         if (!roster) return;
         const plan = buildResolvedRosterUpdate(this.oldBook, this.newBook, roster, this.mode, this.scopeWorkKeys);
         this.batchConsolidationPreview = null;
+        this.batchDeletionPreview = null;
         this.rosterPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName };
         const heading = this.find('#stwu-roster-heading');
         if (heading) heading.textContent = '按名单更新';
@@ -1563,6 +1571,7 @@ export class UpdaterWindow {
         }
         const removedTotal = plan.groups.reduce((sum, g) => sum + g.duplicateOldIds.length, 0);
         this.rosterPreview = null;
+        this.batchDeletionPreview = null;
         this.batchConsolidationPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName, mode: this.mode };
         const heading = this.find('#stwu-roster-heading');
         if (heading) heading.textContent = '批量合并重复（1:N）';
@@ -1611,6 +1620,65 @@ export class UpdaterWindow {
         }
         this.repair(false, false);
         this.message(`已核验并批量合并 ${result.mergedGroups} 个重复角色（更新 ${result.updated} 条，移除 ${result.removed} 条副本），目标书独有设定已保留。${saved.note || ''}`);
+    }
+
+    previewBatchDeletion() {
+        if (!this.oldBook || !this.newBook || this.sameNamedBook()) return;
+        const checkedIds = this.selectedSourceIds();
+        const useChecked = checkedIds.length > 0;
+        const sourceIds = useChecked
+            ? checkedIds
+            : listEntries(this.newBook).filter(({ entry }) => scopeMatch(entry, this.scopeNames, this.scopeWorkKeys)).map(({ id }) => id);
+        if (!sourceIds.length) {
+            this.message('请先在母本勾选要删除的基准条目，或填写定点名单。');
+            return;
+        }
+        const plan = planBatchMatchedDeletion(this.oldBook, this.newBook, {
+            sourceIds,
+            workKeys: this.scopeWorkKeys,
+            pairs: this.pairs,
+        });
+        if (!plan.removedOldIds.length) {
+            this.message('目标书中没有匹配到需要删除的条目。');
+            return;
+        }
+        this.rosterPreview = null;
+        this.batchConsolidationPreview = null;
+        this.batchDeletionPreview = { plan, before: this.oldBook, mother: this.newBook, target: this.oldName };
+        const heading = this.find('#stwu-roster-heading');
+        if (heading) heading.textContent = '批量匹配删除';
+        const saveBtn = this.find('[data-action="save-roster"]');
+        saveBtn.textContent = '确认删除';
+        saveBtn.hidden = false;
+        const basis = useChecked ? `母本勾选 ${checkedIds.length} 条` : `定点名单（${this.scopeNames.length} 个）`;
+        this.find('[data-roster-summary]').textContent = `母本「${this.newName}」 → 目标书「${this.oldName}」 · 基准：${basis}。\n`
+            + `将从目标书删除 ${plan.removedOldIds.length} 条匹配条目，目标书未匹配的世界观与设定保持不变。`;
+        const lines = [
+            '将从目标书删除\n' + plan.groups.map(g => `${g.name}：删除 UID ${g.oldIds.join('、')}`).join('\n'),
+        ];
+        if (plan.missing.length) lines.push('目标书未找到\n' + plan.missing.join('\n'));
+        this.find('[data-roster-report]').textContent = lines.join('\n\n');
+        this.find('[data-roster-dialog]').showModal();
+        this.find('[data-roster-report]').scrollTop = 0;
+    }
+
+    async saveBatchDeletion() {
+        const preview = this.batchDeletionPreview;
+        this.batchDeletionPreview = null;
+        if (!preview) return;
+        const { plan, before, mother, target } = preview;
+        if (target !== this.oldName || before !== this.oldBook || mother !== this.newBook || this.sameNamedBook()) {
+            throw new Error('世界书在预览后已变化，请重新预览。');
+        }
+        const result = buildBatchMatchedDeletion(before, mother, plan.groups, this.scopeWorkKeys);
+        this.message('正在批量删除目标匹配条目并核验…');
+        const saved = await this.saveTargetFromMother(result.data, preview);
+        this.oldBook = saved.data;
+        const removed = new Set(result.removedOldIds);
+        this.pairs = this.pairs.filter(pair => !removed.has(pair.oldId));
+        for (const id of removed) this.unpairedOld.delete(id);
+        this.repair(false, false);
+        this.message(`已核验并批量删除 ${result.removed} 条目标匹配条目，其余设定已保留。${saved.note || ''}`);
     }
 
     async saveRoster() {
