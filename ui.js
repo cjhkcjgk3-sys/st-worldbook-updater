@@ -1,4 +1,4 @@
-const VERSION = '1.10.7';
+const VERSION = '1.10.8';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -159,7 +159,7 @@ export class UpdaterWindow {
                   <div class="stwu-pane-head"><h3>母本</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="new" title="跳到母本待核对条目" hidden></button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择母本" data-book="new"></select>
                   <div class="stwu-source-line"><button type="button" class="menu_button" data-action="file">打开 JSON 文件</button><input type="file" data-file accept=".json,application/json" hidden></div>
-                  <input class="text_pole" type="search" data-search="new" aria-label="搜索母本条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <input class="text_pole" type="search" data-search="new" aria-label="搜索母本条目" placeholder="搜索标题、关键词" title="单字按完整标题或关键词搜索" autocomplete="off">
                   <ol class="stwu-list" data-list="new" aria-label="母本条目"></ol>
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="new" aria-label="母本每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="new:-1" aria-label="母本上一页">‹</button><span data-page-status="new">0 / 0</span><button type="button" class="menu_button" data-page-step="new:1" aria-label="母本下一页">›</button></div>
                 </section>
@@ -167,7 +167,7 @@ export class UpdaterWindow {
                   <div class="stwu-pane-head"><h3>目标书</h3><button type="button" class="menu_button stwu-review-jump" data-review-jump="old" title="跳到目标书待核对条目" hidden></button><span class="stwu-count"></span></div>
                   <select class="text_pole" aria-label="选择目标书" data-book="old"></select>
                   <div class="stwu-source-line">目标书独有条目会保留</div>
-                  <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" autocomplete="off">
+                  <input class="text_pole" type="search" data-search="old" aria-label="搜索目标书条目" placeholder="搜索标题、关键词" title="单字按完整标题或关键词搜索" autocomplete="off">
                   <ol class="stwu-list" data-list="old" aria-label="目标书条目"></ol>
                   <div class="stwu-pagebar"><label>每页 <select class="text_pole" data-page-size="old" aria-label="目标书每页条数"><option>10</option><option selected>25</option><option>50</option><option>100</option><option>500</option><option>1000</option></select></label><button type="button" class="menu_button" data-page-step="old:-1" aria-label="目标书上一页">‹</button><span data-page-status="old">0 / 0</span><button type="button" class="menu_button" data-page-step="old:1" aria-label="目标书下一页">›</button></div>
                 </section>
@@ -719,16 +719,17 @@ export class UpdaterWindow {
     invalidateIncoming() { this.incomingCache = null; this.rosterReviewRows = null; }
     incoming() {
         const reviewRows = { new: new Set(), old: new Set() };
-        if (!this.oldBook || !this.newBook) return { states: new Map(), reviewRows };
+        const reviewReasons = new Map();
+        if (!this.oldBook || !this.newBook) return { states: new Map(), reviewRows, reviewReasons };
         if (this.incomingCache) return this.incomingCache;
         const scoped = this.scopeGroups?.length;
-        const states = classifyIncoming(this.oldBook, this.newBook, this.pairs, scoped ? undefined : reviewRows.old);
+        const states = classifyIncoming(this.oldBook, this.newBook, this.pairs, scoped ? undefined : reviewRows.old, reviewReasons);
         if (scoped) {
             this.rosterReviewRows ??= matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions()).reviewRows;
-            return this.incomingCache = { states, reviewRows: this.rosterReviewRows };
+            return this.incomingCache = { states, reviewRows: this.rosterReviewRows, reviewReasons: new Map() };
         }
         for (const [id, state] of states) if (state === 'review') reviewRows.new.add(id);
-        return this.incomingCache = { states, reviewRows };
+        return this.incomingCache = { states, reviewRows, reviewReasons };
     }
 
     jumpToReview(side) {
@@ -917,7 +918,7 @@ export class UpdaterWindow {
         const fragment = document.createDocumentFragment();
         const rowElements = new Map();
         const pairsById = new Map(this.pairs.map((p, i) => [side === 'old' ? p.oldId : p.newId, { pair: p, number: i + 1 }]));
-        const { states, reviewRows } = this.incoming();
+        const { states, reviewRows, reviewReasons } = this.incoming();
         const reviewIds = reviewRows[side];
         const pinning = this.pinMatches && this.newBook && (this.pairs.length > 0 || this.scopeNames.length > 0 || reviewIds.size > 0);
         const pinned = new Set();
@@ -930,7 +931,11 @@ export class UpdaterWindow {
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);
         }
-        const filtered = rows.filter(({ entry }) => !search || [entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].join('\n').toLocaleLowerCase().includes(search));
+        const single = [...search].length === 1;
+        const filtered = rows.filter(({ entry }) => !search || [entry.comment || '', ...(entry.key || []), ...(entry.keysecondary || [])].some(value => {
+            const field = value.trim().toLocaleLowerCase();
+            return single ? field === search : field.includes(search);
+        }));
         const reviewCount = reviewIds.size ? filtered.filter(({ id }) => reviewIds.has(id)).length : 0;
         const reviewJump = this.find(`[data-review-jump="${side}"]`);
         reviewJump.hidden = !reviewCount;
@@ -965,7 +970,8 @@ export class UpdaterWindow {
                 : state ? '未配对 · 可复制' : '待载入目标书';
             li.classList.toggle('stwu-entry-pinned', pinned.has(id));
             const pairing = pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel;
-            const label = needsReview ? (pair ? `待核对 · ${pairing}` : '待核对') : pairing;
+            const reason = side === 'new' ? reviewReasons.get(id) : '';
+            const label = needsReview ? ['待核对', reason, pair ? pairing : ''].filter(Boolean).join(' · ') : pairing;
             const status = element('span', 'stwu-entry-status', (pinned.has(id) ? '置顶 · ' : '') + label);
             status.classList.toggle('stwu-paired', !!pair); button.append(status);
             li.append(button); fragment.append(li); rowElements.set(String(id), li);

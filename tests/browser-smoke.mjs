@@ -249,10 +249,11 @@ try {
     reset(); {
         const common = Array.from({ length: 30 }, (_, i) => entry(i, `角色 ${i}`, [], '旧正文'));
         const target = book([...common, entry(80, '尼可', ['尼可·莱恩', '魔女N', '尼可'], '旧正文'),
-            entry(81, '露娜', [], '待核对甲'), entry(82, '露娜', [], '待核对乙'), entry(83, '爱好', ['爱'], '目标独有')]);
+            entry(81, '露娜', [], '待核对甲'), entry(82, '露娜', [], '待核对乙'),
+            entry(83, '爱好', ['爱', '角色'], '目标独有'), entry(84, '爱可菲', [], '目标独有'), entry(85, '爱诺', [], '目标独有')]);
         const mother = book([...common.map(row => ({ ...row, uid: row.uid + 100, content: '新正文' })),
             entry(180, '尼可·莱恩', ['尼可·莱恩', '魔女「N」', '喧寂于心'], '新正文'),
-            entry(181, '露娜·费尔', [], '待核对正文'), entry(182, '爱情', ['爱'], '新条目')]);
+            entry(181, '露娜·费尔', [], '待核对正文'), entry(182, '爱情', ['爱', '角色'], '新条目')]);
         state.books.set('演示_目标书', target);
         state.books.set('演示_母本', mother);
         const { page, ctx, errors } = await prepare(320, 568);
@@ -264,7 +265,7 @@ try {
         await sourceJump.click();
         assert.equal(await page.locator('[data-page-status="new"]').textContent(), '2 / 2');
         assert.match(await status('new', 180).textContent(), /置顶 · 配对 \d+ · 有变化/);
-        assert.equal(await status('new', 181).textContent(), '置顶 · 待核对');
+        assert.equal(await status('new', 181).textContent(), '置顶 · 待核对 · 目标书候选 2 条（露娜）');
         await targetJump.click();
         assert.equal(await page.locator('[data-page-status="old"]').textContent(), '2 / 2');
         assert.equal(await status('old', 80).textContent(), await status('new', 180).textContent());
@@ -305,6 +306,10 @@ try {
             return text.getClientRects().length;
         });
         assert.equal(bulkLines, 1);
+        await page.locator('[data-search="old"]').fill('爱');
+        assert.deepEqual(await page.locator('[data-list="old"] [data-id]').evaluateAll(rows => rows.map(row => row.dataset.id)), ['83']);
+        await page.locator('[data-search="old"]').fill('爱可');
+        assert.deepEqual(await page.locator('[data-list="old"] [data-id]').evaluateAll(rows => rows.map(row => row.dataset.id)), ['84']);
         await page.locator('[data-search="old"]').fill('尼可');
         assert.equal(await targetJump.isVisible(), false);
         await page.locator('[data-search="old"]').fill('');
@@ -319,7 +324,7 @@ try {
         assert.match(await page.locator('[data-roster-summary]').textContent(), /替换 1 · 复制 0 · 无变化 0 · 待核对 1/);
         assert.equal(state.writes, 0);
         assert.deepEqual(errors, []);
-        results.push('单字重合不进待核对，分类批量勾选、跨页跳转与名单预览通过');
+        results.push('单字搜索完整项、通用关键词不制造候选、待核对原因与跨页分类勾选通过');
         await ctx.close();
     }
 

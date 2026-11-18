@@ -251,41 +251,54 @@ function entrySignature(entry) {
     return canonical(value);
 }
 
-export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets) {
+export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, reviewReasons) {
     const result = new Map(), paired = new Set(pairs.map(p => String(p.newId)));
-    const oldTitles = new Set(), oldKeys = new Set();
-    for (const entry of Object.values(oldBook.entries)) {
-        if (entry.comment?.trim()) oldTitles.add(entry.comment.trim());
-        for (const key of entry.key || []) if (corroboratingKeyword(key, [])) oldKeys.add(key.trim());
+    const primaryNames = new Map(), signatures = new Map();
+    const add = (index, key, id) => {
+        if (!index.has(key)) index.set(key, []);
+        index.get(key).push(id);
+    };
+    for (const [id, entry] of Object.entries(oldBook.entries)) {
+        const signature = keySignature(entry);
+        if (signature) add(signatures, signature, id);
+        for (const key of entry.key || []) {
+            if (corroboratingKeyword(key, []) && !/[\\^$*+?\[\]{}|/]/u.test(key)) {
+                add(primaryNames, compactName(normalizeCharacterName(key, [])), id);
+            }
+        }
     }
-    const identityCounts = new Map(), reviewTitles = new Set(), reviewKeys = new Set();
-    const targetTitles = rosterIndex(oldBook, [], { includeKeywords: false });
+    const identityCounts = new Map();
+    const targetTitles = rosterIndex(oldBook, [], { target: true, includeKeywords: false });
     for (const entry of Object.values(newBook.entries)) {
         const identity = JSON.stringify([entry.comment?.trim() || '', keySignature(entry)]);
         identityCounts.set(identity, (identityCounts.get(identity) || 0) + 1);
     }
     for (const [id, entry] of Object.entries(newBook.entries)) {
-        const name = entry.comment?.trim() || '', keys = (entry.key || []).map(x => x.trim()).filter(Boolean);
-        let state;
-        if (paired.has(id)) state = 'paired';
-        else {
-            const titleHits = name ? [...titleMatches(targetTitles, name, [])].filter(targetId => {
-                const target = oldBook.entries[targetId];
-                return !singleNamePair(entry, target, []) || (isSingleName(name, []) && isSingleName(target.comment, []))
-                    || sharedPrimaryKeyword(entry, target, [], true);
-            }) : [];
-            state = (!name && !keys.length) || oldTitles.has(name) || keys.some(k => oldKeys.has(k))
-                || identityCounts.get(JSON.stringify([name, keySignature(entry)])) > 1 || titleHits.length ? 'review' : 'new';
-            if (reviewTargets) for (const targetId of titleHits) reviewTargets.add(targetId);
+        if (paired.has(id)) { result.set(id, 'paired'); continue; }
+        const name = entry.comment?.trim() || '', signature = keySignature(entry);
+        const targets = new Set(name ? [...titleMatches(targetTitles, name, [])].filter(targetId => {
+            const target = oldBook.entries[targetId];
+            return !singleNamePair(entry, target, []) || (isSingleName(name, []) && isSingleName(target.comment, []))
+                || sharedPrimaryKeyword(entry, target, [], true);
+        }) : []);
+        const fullName = compactName(splitBrackets(normalizeCharacterName(name, [])).outside);
+        if (corroboratingKeyword(fullName, [])) {
+            for (const targetId of primaryNames.get(fullName) || []) targets.add(targetId);
         }
-        result.set(id, state);
-        if (reviewTargets && state === 'review') {
-            if (name) reviewTitles.add(name);
-            for (const key of keys) if (oldKeys.has(key)) reviewKeys.add(key);
+        if (entry.key?.some(key => corroboratingKeyword(key, []))) {
+            for (const targetId of signatures.get(signature) || []) {
+                if (!name || !oldBook.entries[targetId].comment?.trim()) targets.add(targetId);
+            }
         }
-    }
-    if (reviewTargets) for (const [id, entry] of Object.entries(oldBook.entries)) {
-        if (reviewTitles.has(entry.comment?.trim()) || entry.key?.some(key => reviewKeys.has(key.trim()))) reviewTargets.add(id);
+        const duplicate = identityCounts.get(JSON.stringify([name, signature])) > 1;
+        const unnamed = !name && !signature;
+        result.set(id, targets.size || duplicate || unnamed ? 'review' : 'new');
+        if (reviewReasons && targets.size) {
+            const examples = new Set([...targets].slice(0, 2).map(targetId => title(oldBook.entries[targetId])));
+            reviewReasons.set(id, `目标书候选 ${targets.size} 条（${[...examples].join('、')}${targets.size > 2 ? '等' : ''}）`);
+        } else if (reviewReasons && unnamed) reviewReasons.set(id, '母本缺少标题和主关键词');
+        else if (reviewReasons && duplicate) reviewReasons.set(id, '母本有重名且主关键词相同的条目');
+        if (reviewTargets) for (const targetId of targets) reviewTargets.add(targetId);
     }
     return result;
 }
@@ -698,7 +711,7 @@ export function parseNameList(text, { includeGroups = false } = {}) {
 }
 
 function rosterIndex(book, workKeys, { includeKeywords = true, target = false } = {}) {
-    const exact = new Map(), short = new Map(), compound = new Set(), singleTitles = new Set();
+    const exact = new Map(), short = new Map(), singleTitles = new Set();
     const add = (index, key, id) => {
         if (!index.has(key)) index.set(key, []);
         index.get(key).push(id);
@@ -712,7 +725,6 @@ function rosterIndex(book, workKeys, { includeKeywords = true, target = false } 
         if (shortTitle) add(short, shortTitle, id);
         const [primary, ...secondary] = target ? compoundTitleNames(entry.comment, workKeys) : [];
         if (primary) {
-            compound.add(id);
             // The first name identifies the entry. Companion names only flag a possible existing entry.
             for (const name of (includeKeywords ? [primary, ...secondary] : [primary])) {
                 for (const key of new Set(exactNameKeys(name, workKeys))) add(exact, key, id);
@@ -721,7 +733,7 @@ function rosterIndex(book, workKeys, { includeKeywords = true, target = false } 
             if (shortPrimary) add(short, shortPrimary, id);
         }
     }
-    return { exact, short, compound, singleTitles };
+    return { exact, short, singleTitles };
 }
 
 function rosterHits(index, keys, shortKeys = []) {
@@ -746,7 +758,7 @@ function titleMatches(index, title, workKeys) {
 
 function titleMatchKeys(title, workKeys) {
     const keys = exactNameKeys(title, workKeys);
-    return isSingleName(title, workKeys) ? keys : keys.filter(key => [...key].length > 1);
+    return isSingleName(title, workKeys) || [...compactName(title)].length === 1 ? keys : keys.filter(key => [...key].length > 1);
 }
 
 export function matchRosterEntries(oldBook, newBook, groups, {
@@ -816,12 +828,6 @@ export function matchRosterEntries(oldBook, newBook, groups, {
         if (sourceShort) shortKeys.add(sourceShort);
         const keys = [...item.keys, ...titleMatchKeys(source.comment, workKeys)].filter(key => !shortKeys.has(key));
         const namedTargets = rosterHits(targetTitles, keys, shortKeys);
-        // A source keyword matching a target title is evidence of a possible alias.
-        const keywordKeys = [...entryNameCandidates({ key: source.key }, workKeys)]
-            .filter(key => !shortKeys.has(key) && corroboratingKeyword(key, workKeys));
-        for (const oldId of rosterHits(targetTitles, keywordKeys)) {
-            if (!targetTitles.compound.has(oldId)) namedTargets.add(oldId);
-        }
         const targets = rosterHits(targetIndex, keys, shortKeys);
         for (const oldId of namedTargets) targets.add(oldId);
         if (overrides.has(newId)) {
@@ -846,9 +852,10 @@ export function matchRosterEntries(oldBook, newBook, groups, {
             addReview(`${item.name}（目标书有多个匹配条目）`, [newId], targets);
         } else if (!targets.size) {
             const signature = keySignature(source);
-            if (sourceSignatureCounts.get(signature) === 1 && targetSignatures.has(signature)
+            const unnamed = (targetSignatures.get(signature) || []).filter(id => !source.comment?.trim() || !oldBook.entries[id].comment?.trim());
+            if (sourceSignatureCounts.get(signature) === 1 && unnamed.length
                 && source.key?.some(key => corroboratingKeyword(key, workKeys))) {
-                addReview(`${item.name}（目标书有主关键词完全相同、标题不同的条目）`, [newId], targetSignatures.get(signature));
+                addReview(`${item.name}（缺少标题，主关键词完全相同）`, [newId], unnamed);
             } else additions.push(newId);
         } else {
             const oldId = targets.values().next().value;
