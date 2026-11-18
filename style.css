@@ -175,6 +175,16 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-roster-dialog [data-roster-summary] { white-space: pre-line; overflow-wrap: anywhere; }
 .stwu .stwu-roster-report { min-height: 0; overflow: auto; padding: 6px 8px; border-block: 1px solid var(--wu-border); }
 .stwu-roster-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.stwu-consolidate-dialog [data-consolidate-context] { max-height: 12dvh; overflow: auto; overflow-wrap: anywhere; }
+.stwu-consolidate-dialog [data-consolidate-summary] { max-height: 22dvh; overflow: auto; white-space: pre-line; overflow-wrap: anywhere; }
+.stwu-consolidate-dialog [data-consolidate-candidates] { display: flex; flex-direction: column; gap: 6px; min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.stwu-consolidate-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: 6px 10px; }
+.stwu-consolidate-controls label { display: grid; gap: 3px; min-width: 0; font-size: .86em; }
+.stwu-consolidate-controls select { text-overflow: ellipsis; }
+.stwu-consolidate-candidate { display: grid; flex: 0 0 auto; gap: 4px; padding: 6px 8px; border: 1px solid var(--wu-border); border-radius: 5px; overflow-wrap: anywhere; font-size: .86em; }
+.stwu-consolidate-candidate label { display: flex; min-height: 25px; align-items: flex-start; gap: 6px; }
+.stwu-consolidate-candidate input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; }
+.stwu-consolidate-candidate small { color: var(--wu-em); }
 
 @media (max-width: 680px) {
   dialog.stwu-dialog.popup { width: calc(100vw - 16px); height: clamp(320px, calc(var(--wu-vh,100dvh) - 16px), 100dvh); max-width: calc(100vw - 16px); max-height: calc(var(--wu-vh,100dvh) - 16px); padding: 4px 7px; }

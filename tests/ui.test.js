@@ -38,7 +38,7 @@ function setup() {
         oldName: 'target', newName: 'mother', sourceKind: 'book', pairs: [],
         pairBySource: new Map(), pairByTarget: new Map(), changeCache: new Map(), incomingCache: null,
         newSelection: new Map(), pairChecks: new Map(), unpairedOld: new Set(), unpairedNew: new Set(),
-        selectionCountsValid: false, selectedUpdateCount: 0, selectedCopyCount: 0, visibleCopyCount: 0,
+        selectionCountsValid: false, selectedUpdateCount: 0, selectedEntryCount: 0, visibleCopyCount: 0,
         pageSize: { old: 25, new: 25 }, page: { old: 1, new: 1 },
         filteredRows: { old: [], new: [] }, visibleSourceSet: new Set(['10', '11', '12', '13']),
         selectedOld: null, selectedNew: null, lastSelectedSide: null,
@@ -209,54 +209,62 @@ test('toggleFilteredSelection only toggles current search results and preserves 
     assert.equal(ui.isEntryChecked('13'), true);
 });
 
-test('copySelected copies visible checked IDs and preserves the original pairing and hidden selections', async () => {
+test('copySelected only adds visible missing rows and preserves paired, review and hidden checks', async () => {
     const { ui } = setup();
-    ui.newSelection.set('11', true);
-    ui.newSelection.set('13', true);
-    ui.filteredRows.new = [{ id: '11', entry: ui.newBook.entries['11'] }];
+    ui.newBook.entries['14'] = entry(14, 'Hidden', 'fresh');
+    ui.repair();
+    for (const id of ['11', '12', '13', '14']) ui.newSelection.set(id, true);
+    ui.filteredRows.new = ['11', '12', '13'].map(id => ({ id, entry: ui.newBook.entries[id] }));
+    assert.deepEqual(ui.visibleCopyIds(), ['13']);
     await withConfirm(false, async calls => {
         await ui.copySelected();
         assert.equal(ui.service.writes.length, 0);
-        assert.match(calls[0], /已有配对/);
+        assert.match(calls[0], /已配对/);
+        assert.match(calls[0], /待核对/);
         assert.match(calls[0], /搜索隐藏/);
     });
     await withConfirm(true, async () => {
         await ui.copySelected();
         assert.equal(ui.oldBook.entries['1'].content, 'old');
-        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Bob').length, 2);
-        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'New').length, 0);
-        assert.equal(ui.isEntryChecked('13'), true);
+        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Bob').length, 1);
+        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'New').length, 1);
+        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Hidden').length, 0);
+        assert.equal(ui.isEntryChecked('12'), true);
+        assert.equal(ui.isEntryChecked('13'), false);
+        assert.equal(ui.isEntryChecked('14'), true);
         assert.equal(ui.pairs.filter(pair => pair.newId === '11').length, 1);
         assert.equal(ui.pairForSource('11').oldId, '1');
         ui.repair();
         assert.equal(ui.pairForSource('11').oldId, '1');
-        assert.equal(ui.isEntryChecked('11'), false);
+        assert.equal(ui.isEntryChecked('11'), true);
     });
 });
 
-test('copySelected allows repeated identical copies of an unmatched entry', async () => {
+test('rechecking and repeating copy cannot append a second identical copy', async () => {
     const { ui } = setup();
-    ui.newSelection.set('12', true);
-    await withConfirm(true, async () => {
+    ui.newSelection.set('13', true);
+    await withConfirm(true, async calls => {
         await ui.copySelected();
         const count = Object.keys(ui.oldBook.entries).length;
-        ui.newSelection.set('12', true);
+        ui.newSelection.set('13', true);
         await ui.copySelected();
-        assert.equal(Object.keys(ui.oldBook.entries).length, count + 1);
-        assert.equal(ui.pairs.filter(pair => pair.newId === '12').length, 1);
+        assert.equal(Object.keys(ui.oldBook.entries).length, count);
+        assert.equal(calls.length, 1);
+        assert.equal(ui.service.writes.length, 1);
+        assert.equal(ui.pairs.filter(pair => pair.newId === '13').length, 1);
     });
 });
 
 test('copy failure preserves original books, pairs and explicit selections', async () => {
     const { ui } = setup();
-    ui.newSelection.set('11', true);
+    ui.newSelection.set('13', true);
     const pairs = structuredClone(ui.pairs), target = structuredClone(ui.oldBook);
     ui.service.updateDirect = async () => { throw new Error('write failed'); };
     await withConfirm(true, async () => {
         await assert.rejects(ui.copySelected(), /write failed/);
         assert.deepEqual(ui.oldBook, target);
         assert.deepEqual(ui.pairs, pairs);
-        assert.equal(ui.isEntryChecked('11'), true);
+        assert.equal(ui.isEntryChecked('13'), true);
     });
 });
 

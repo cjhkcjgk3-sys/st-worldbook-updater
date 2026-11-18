@@ -1,9 +1,9 @@
-const VERSION = '1.11.0';
+const VERSION = '1.12.0';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildConsolidation, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
-const retainedPair = pair => ['手动配对', '本次新增', '复制时保留的配对'].includes(pair.reason);
+const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -31,7 +31,7 @@ export class UpdaterWindow {
         this.unpairedNew = new Set();
         this.selectionCountsValid = false;
         this.selectedUpdateCount = 0;
-        this.selectedCopyCount = 0;
+        this.selectedEntryCount = 0;
         this.visibleCopyCount = 0;
         this.pageSize = { old: 25, new: 25 };
         this.page = { old: 1, new: 1 };
@@ -109,6 +109,7 @@ export class UpdaterWindow {
                     <button type="button" class="menu_button" data-pair-btn="auto">重新匹配</button>
                     <button type="button" class="menu_button" data-pair-btn="auto-reset">重置配对</button>
                     <button type="button" class="menu_button" data-pair-btn="unpair-all">全部解除</button>
+                    <button type="button" class="menu_button" data-pair-btn="consolidate">合并或删除目标条目</button>
                     <button type="button" class="menu_button" data-action="swap-sides">交换左右</button>
                   </div>
                   <span class="stwu-pairhint">点击两侧条目后，可在此配对或解除</span>
@@ -200,7 +201,7 @@ export class UpdaterWindow {
             </div>
             <footer class="stwu-footer">
               <label class="stwu-replace-scope">替换范围<select class="text_pole" data-mode aria-label="替换范围"><option value="content">仅正文</option><option value="full">完整条目</option></select></label>
-              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button><button type="button" class="menu_button stwu-primary" data-action="preview-roster" hidden>按名单更新</button></div>
+              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy" title="只复制母本当前结果中已勾选的缺失条目">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button><button type="button" class="menu_button stwu-primary" data-action="preview-roster" hidden>按名单更新</button></div>
             </footer>
           </div></div>
           <dialog class="stwu-roster-dialog" aria-labelledby="stwu-roster-heading" data-roster-dialog>
@@ -210,6 +211,20 @@ export class UpdaterWindow {
             <div class="stwu-roster-actions">
               <button type="button" class="menu_button" data-action="close-roster" autofocus>返回</button>
               <button type="button" class="menu_button stwu-primary" data-action="save-roster">确认更新</button>
+            </div>
+          </dialog>
+          <dialog class="stwu-roster-dialog stwu-consolidate-dialog" aria-labelledby="stwu-consolidate-heading" data-consolidate-dialog>
+            <h3 id="stwu-consolidate-heading">合并或删除目标条目</h3>
+            <p data-consolidate-context></p>
+            <div class="stwu-consolidate-controls">
+              <label>操作<select class="text_pole" data-target-operation><option value="consolidate">合并为一条</option><option value="delete">删除匹配条目</option></select></label>
+              <label data-consolidate-keep-label>保留<select class="text_pole" data-consolidate-keep></select></label>
+            </div>
+            <ul data-consolidate-candidates aria-label="目标书候选条目"></ul>
+            <p data-consolidate-summary aria-live="polite"></p>
+            <div class="stwu-roster-actions">
+              <button type="button" class="menu_button" data-action="close-consolidation" autofocus>返回</button>
+              <button type="button" class="menu_button stwu-primary" data-action="save-consolidation" disabled>确认合并</button>
             </div>
           </dialog>`;
         try {
@@ -226,6 +241,13 @@ export class UpdaterWindow {
             event.preventDefault(); if (!this.busy) this.hide();
         });
         this.on(this.find('[data-roster-dialog]'), 'cancel', () => { this.rosterPreview = null; });
+        this.on(this.find('[data-consolidate-dialog]'), 'cancel', () => { this.targetOperation = null; });
+        this.on(this.find('[data-consolidate-dialog]'), 'change', event => {
+            if (event.target.matches('[data-target-operation]')) {
+                for (const input of this.dialog.querySelectorAll('[data-consolidate-remove]')) input.checked = false;
+            }
+            this.renderTargetOperation();
+        });
         this.on(this.dialog, 'click', event => {
             if (!event.target.closest('.stwu-tool')) this.closeTools();
             const pairBtn = event.target.closest('[data-pair-btn]');
@@ -269,6 +291,11 @@ export class UpdaterWindow {
                 this.find('[data-roster-dialog]').close();
                 this.run(() => this.saveRoster());
             }
+            if (action === 'close-consolidation') {
+                this.targetOperation = null;
+                this.find('[data-consolidate-dialog]').close();
+            }
+            if (action === 'save-consolidation') this.run(() => this.saveTargetOperation());
             if (action === 'toggle-selection') this.toggleFilteredSelection();
             if (action === 'toggle-target-selection') this.toggleFilteredSelection('old');
             if (action === 'copy-names') this.run(() => this.copySourceNames());
@@ -303,8 +330,8 @@ export class UpdaterWindow {
                 if (pair) { pair.checked = event.target.checked; this.pairChecks.set(sourceId, event.target.checked); }
                 const change = event.target.checked ? 1 : -1;
                 if (wasSelected !== event.target.checked) {
-                    this.selectedCopyCount += change;
-                    if (this.visibleSourceSet.has(sourceId)) this.visibleCopyCount += change;
+                    this.selectedEntryCount += change;
+                    if (this.visibleSourceSet.has(sourceId) && this.incoming().states.get(sourceId) === 'new') this.visibleCopyCount += change;
                     if (pair && this.inScope(pair.newId) && this.changed(pair)) this.selectedUpdateCount += change;
                 }
                 this.selectionCountsValid = true;
@@ -423,6 +450,7 @@ export class UpdaterWindow {
         if (action === 'pair') this.manualPair();
         else if (action === 'unpair') this.unpair();
         else if (action === 'unpair-all') this.unpairAll();
+        else if (action === 'consolidate') this.run(() => this.openTargetOperation());
         else if (action === 'auto') { this.repair(); this.message(`已重新自动匹配，共 ${this.pairs.length} 组；保留人工配对、解除和勾选。`); this.render(); }
         else if (action === 'auto-reset' && globalThis.confirm('将清除人工配对、解除记录及当前勾选，重新自动匹配。确认？')) {
             this.resetPairDecisions(); this.repair(); this.message(`已重置配对决定，自动匹配 ${this.pairs.length} 组。`); this.render();
@@ -762,7 +790,12 @@ export class UpdaterWindow {
         if (this.newSelection.has(id)) return this.newSelection.get(id) === true;
         return !!this.pairForSource(id)?.checked;
     }
-    selectedCopyIds() { return this.newBook ? listEntries(this.newBook).filter(({ id }) => this.isEntryChecked(id)).map(({ id }) => id) : []; }
+    selectedSourceIds() { return Object.keys(this.newBook?.entries ?? {}).filter(id => this.isEntryChecked(id)); }
+
+    visibleCopyIds() {
+        const { states } = this.incoming();
+        return this.visibleSourceIds().filter(id => states.get(id) === 'new' && this.isEntryChecked(id));
+    }
 
     visibleSourceIds() {
         return this.filteredRows.new.map(({ id }) => id);
@@ -969,7 +1002,7 @@ export class UpdaterWindow {
         this.page[side] = Math.max(1, Math.min(pageCount, this.page[side]));
         const start = (this.page[side] - 1) * this.pageSize[side];
         const pageRows = filtered.slice(start, start + this.pageSize[side]);
-        if (side === 'new') this.visibleCopyCount = filtered.reduce((count, { id }) => count + Number(this.isEntryChecked(id)), 0);
+        if (side === 'new') this.visibleCopyCount = this.visibleCopyIds().length;
         for (const { id, entry } of pageRows) {
             const linked = pairsById.get(id), pair = linked?.pair, changed = pair && this.changed(pair);
             const li = element('li', 'stwu-entry wi-card-entry'); li.dataset.id = id;
@@ -991,8 +1024,7 @@ export class UpdaterWindow {
             const needsReview = reviewIds.has(id);
             const unpairedLabel = side === 'old' ? '目标书独有 · 保留'
                 : !this.inScope(id) ? '名单外'
-                : state === 'duplicate' ? '内容重复 · 可复制'
-                : state ? '未配对 · 可复制' : '待载入目标书';
+                : state === 'new' ? '未配对 · 可复制' : '待载入目标书';
             li.classList.toggle('stwu-entry-pinned', pinned.has(id));
             const pairing = pair ? `配对 ${linked.number} · ${changed ? '有变化' : '无变化'}${this.inScope(pair.newId) ? '' : ' · 名单外'}` : unpairedLabel;
             const reason = side === 'new' ? reviewReasons.get(id) : '';
@@ -1034,6 +1066,7 @@ export class UpdaterWindow {
         for (const row of this.dialog.querySelectorAll('.stwu-set-row')) {
             row.querySelector('[data-set-value]').disabled = this.busy || !row.querySelector('[data-set-mode]').value;
         }
+        if (this.targetOperation) this.renderTargetOperation();
     }
 
     renderBulkSelection() {
@@ -1053,11 +1086,11 @@ export class UpdaterWindow {
         this.renderBulkSelection();
         if (!this.selectionCountsValid) this.refreshSelectionCounts();
         const hasRoster = this.scopeNames.length > 0;
-        const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedCopyCount} 条 · 当前结果可复制 ${this.visibleCopyCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;
+        const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedEntryCount} 条 · 当前结果可复制 ${this.visibleCopyCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;
         for (const node of this.dialog.querySelectorAll('.stwu-selection')) {
-            if (hasRoster && !this.busy) node.textContent = `已勾选 ${this.selectedCopyCount} 条`;
+            if (hasRoster && !this.busy) node.textContent = `已勾选 ${this.selectedEntryCount} 条`;
             else node.textContent = node.classList.contains('stwu-selection-compact')
-                ? (this.busy ? '处理中…' : `已选 ${this.selectedCopyCount} · 可替换 ${this.selectedUpdateCount}`)
+                ? (this.busy ? '处理中…' : `已选 ${this.selectedEntryCount} · 可替换 ${this.selectedUpdateCount}`)
                 : summary;
         }
         const copy = this.find('[data-action="copy"]');
@@ -1074,8 +1107,8 @@ export class UpdaterWindow {
 
     refreshSelectionCounts() {
         this.selectedUpdateCount = this.selectedPairs().length;
-        this.selectedCopyCount = this.selectedCopyIds().length;
-        this.visibleCopyCount = this.filteredRows.new.reduce((count, { id }) => count + Number(this.isEntryChecked(id)), 0);
+        this.selectedEntryCount = this.selectedSourceIds().length;
+        this.visibleCopyCount = this.visibleCopyIds().length;
         this.selectionCountsValid = true;
     }
 
@@ -1099,6 +1132,7 @@ export class UpdaterWindow {
         setDisabled('unpair-all', !ready || !this.pairs.length);
         setDisabled('auto', !ready);
         setDisabled('auto-reset', !ready);
+        setDisabled('consolidate', !ready || !this.selectedNew || this.service.requiresReload || this.sameNamedBook());
         const hint = this.find('.stwu-pairbar .stwu-pairhint');
         if (hint) hint.textContent = canUnpair ? '当前条目已配对，可直接解除' : canPair ? '已选两侧条目，可执行配对' : '点击两侧条目后，可在此配对或解除';
     }
@@ -1155,30 +1189,31 @@ export class UpdaterWindow {
     async copySelected() {
         if (!this.oldBook || !this.newBook) throw new Error('请先载入母本和目标书。');
         const visible = new Set(this.visibleSourceIds());
-        const selectedIds = this.selectedCopyIds();
-        const additions = selectedIds.filter(id => visible.has(id) && this.newBook.entries[id]);
-        const hidden = selectedIds.length - additions.length;
-        if (!additions.length) { this.message('母本当前搜索结果里没有已勾选的条目。'); return; }
-        const selected = new Set(additions);
-        const existing = new Set(this.pairs.filter(pair => selected.has(pair.newId)).map(pair => pair.newId));
+        const selectedIds = this.selectedSourceIds();
+        const additions = this.visibleCopyIds();
+        const { states } = this.incoming();
+        const hidden = selectedIds.filter(id => !visible.has(id)).length;
+        const paired = selectedIds.filter(id => visible.has(id) && states.get(id) === 'paired').length;
+        const review = selectedIds.filter(id => visible.has(id) && states.get(id) === 'review').length;
+        const notes = [
+            paired && `已配对 ${paired} 条，可通过「替换所选」更新。`,
+            review && `待核对 ${review} 条，可先确认配对。`,
+            hidden && `搜索隐藏 ${hidden} 条，保留勾选。`,
+        ].filter(Boolean).join(' ');
+        if (!additions.length) { this.message(`当前搜索结果没有可复制的缺失条目。${notes}`); return; }
         const pairs = this.pairs.map(pair => ({ ...pair, checked: false }));
-        const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode, { merge: true, additions, forceAdditions: additions });
-        const names = additions.slice(0, 12).map(id => `- ${title(this.newBook.entries[id])}`).join('\n');
-        const more = additions.length > 12 ? `\n- 另有 ${additions.length - 12} 条` : '';
-        const conflicts = existing.size ? `\n其中 ${existing.size} 条已有配对，复制后继续沿用原配对。` : '';
-        const hiddenNote = hidden ? `\n另有 ${hidden} 条手工勾选被搜索隐藏，本次不复制。` : '';
-        if (!globalThis.confirm(`将从母本「${this.newName}」向目标书「${this.oldName}」复制以下 ${result.added} 条完整条目：\n${names}${more}${conflicts}${hiddenNote}\n复制不受定点名单限制；即使已有相同副本也会再次复制。确认继续？`)) return;
+        const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode, { merge: true, additions, workKeys: this.scopeWorkKeys });
+        const skipped = result.skipped ? `已有相同条目 ${result.skipped} 条，已跳过。` : '';
+        if (!result.added) { this.message(`没有需要新增的条目。${skipped}${notes}`); return; }
+        const names = result.addedPairs.slice(0, 12).map(({ newId }) => `- ${title(this.newBook.entries[newId])}`).join('\n');
+        const more = result.added > 12 ? `\n- 另有 ${result.added - 12} 条` : '';
+        if (!globalThis.confirm([`将从母本「${this.newName}」向目标书「${this.oldName}」复制以下 ${result.added} 条缺失条目：\n${names}${more}`, skipped, notes, '确认继续？'].filter(Boolean).join('\n'))) return;
         this.message('正在向目标书复制条目并核验…');
         const saved = await this.service.updateDirect(this.oldName, this.oldBook, result.data);
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
         this.changeCache.clear();
-        this.pairs = [
-            ...this.pairs.map(pair => existing.has(pair.newId)
-                ? { ...pair, checked: false, reason: retainedPair(pair) ? pair.reason : '复制时保留的配对' }
-                : pair),
-            ...result.addedPairs.filter(pair => !existing.has(pair.newId)),
-        ];
+        this.pairs = [...this.pairs, ...result.addedPairs];
         this.syncPairIndex();
         for (const pair of result.addedPairs) {
             this.newSelection.set(pair.newId, false);
@@ -1186,7 +1221,112 @@ export class UpdaterWindow {
         }
         this.selectionCountsValid = false;
         this.invalidateIncoming();
-        this.message(`已核验：复制 ${result.added} 条。${hidden ? `搜索隐藏的 ${hidden} 条仍保留勾选，未复制。` : ''}${saved.note || ''}`);
+        this.message(`已核验：复制 ${result.added} 条缺失条目。${skipped}${notes}${saved.note || ''}`);
+    }
+
+    sameNamedBook() {
+        return this.sourceKind === 'book' && this.oldName === this.newName;
+    }
+
+    openTargetOperation() {
+        const newId = this.selectedNew;
+        if (this.sameNamedBook() || !this.oldBook || !this.newBook?.entries[newId]) return;
+        const matches = new Set(consolidationCandidates(this.oldBook, this.newBook, newId, this.scopeWorkKeys));
+        if (!matches.size) { this.message('目标书没有可核对的匹配条目。'); return; }
+        this.targetOperation = { target: this.oldName, before: this.oldBook, mother: this.newBook, newId, mode: this.mode };
+        this.find('[data-consolidate-context]').textContent = `母本条目「${title(this.newBook.entries[newId])}」 · 目标书「${this.oldName}」`;
+        this.find('[data-target-operation]').value = 'consolidate';
+        const keep = this.find('[data-consolidate-keep]');
+        const labels = document.createDocumentFragment(), rows = document.createDocumentFragment();
+        for (const { id, entry } of listEntries(this.oldBook)) {
+            if (!matches.has(id)) continue;
+            const name = `${title(entry)} · UID ${id}`;
+            labels.append(new Option(name, id));
+            const row = element('li', 'stwu-consolidate-candidate');
+            const label = element('label'), check = element('input');
+            check.type = 'checkbox';
+            check.dataset.consolidateRemove = id;
+            label.append(check, element('span', '', name));
+            row.append(label);
+            if (entry.key?.length) row.append(element('small', '', `主关键词：${entry.key.join('、').slice(0, 160)}`));
+            if (entry.content.trim()) row.append(element('p', '', entry.content.trim().slice(0, 120)));
+            rows.append(row);
+        }
+        keep.replaceChildren(labels);
+        const linked = this.pairForSource(newId);
+        if (matches.has(linked?.oldId)) keep.value = linked.oldId;
+        this.find('[data-consolidate-candidates]').replaceChildren(rows);
+        this.find('[data-consolidate-dialog]').showModal();
+        this.renderTargetOperation();
+    }
+
+    targetOperationSelection() {
+        const deleting = this.find('[data-target-operation]').value === 'delete';
+        const retained = this.find('[data-consolidate-keep]').value;
+        const oldIds = [...this.dialog.querySelectorAll('[data-consolidate-remove]')]
+            .filter(input => input.checked && (deleting || input.dataset.consolidateRemove !== retained))
+            .map(input => input.dataset.consolidateRemove);
+        return { deleting, retained, oldIds };
+    }
+
+    renderTargetOperation() {
+        if (!this.targetOperation) return;
+        const { deleting, retained, oldIds } = this.targetOperationSelection();
+        const label = this.find('[data-consolidate-keep-label]');
+        label.hidden = deleting;
+        this.find('[data-consolidate-keep]').disabled = this.busy || deleting;
+        const inputs = this.dialog.querySelectorAll('[data-consolidate-remove]');
+        for (const input of inputs) {
+            const keep = !deleting && input.dataset.consolidateRemove === retained;
+            if (keep) input.checked = false;
+            input.disabled = this.busy || keep;
+        }
+        const button = this.find('[data-action="save-consolidation"]');
+        button.textContent = deleting ? '确认删除' : '确认合并';
+        button.disabled = this.busy || this.service.requiresReload || !oldIds.length || (!deleting && !retained);
+        const removing = oldIds.map(id => `UID ${id}`).join('、');
+        const scope = this.targetOperation.mode === 'full' ? '完整条目' : '仅正文';
+        const remaining = inputs.length - oldIds.length - Number(!deleting);
+        const unselected = oldIds.length && remaining > 0 ? `另有 ${remaining} 条未勾选的候选将保留。` : '';
+        this.find('[data-consolidate-summary]').textContent = deleting
+            ? (oldIds.length ? `将从目标书删除 ${oldIds.length} 条（${removing}）。${unselected}` : '勾选要从目标书删除的条目。')
+            : (oldIds.length ? `保留 UID ${retained}，用母本更新（${scope}），删除 ${removing}。${unselected}`
+                : inputs.length < 2 ? '合并需要至少两条候选。' : '选择保留条目，再勾选要移除的同一人物副本。');
+    }
+
+    async saveTargetOperation() {
+        const operation = this.targetOperation;
+        if (!operation) return;
+        const { deleting, retained, oldIds } = this.targetOperationSelection();
+        if (!oldIds.length) return;
+        this.targetOperation = null;
+        this.find('[data-consolidate-dialog]').close();
+        const { target, before, mother, newId, mode } = operation;
+        if (target !== this.oldName || before !== this.oldBook || mother !== this.newBook || this.sameNamedBook()) {
+            throw new Error('世界书在预览后已变化，请重新选择条目。');
+        }
+        const result = deleting
+            ? buildMatchedDeletion(before, mother, { newId, oldIds }, this.scopeWorkKeys)
+            : buildConsolidation(before, mother, { newId, oldId: retained, duplicateOldIds: oldIds }, mode, this.scopeWorkKeys);
+        this.message('正在保存并核验目标书…');
+        const saved = await this.service.updateDirect(target, before, result.data);
+        this.oldBook = saved.data;
+        const removed = new Set(result.removedOldIds);
+        this.pairs = this.pairs.filter(pair => !removed.has(pair.oldId)
+            && (deleting || (pair.oldId !== retained && pair.newId !== newId)));
+        for (const id of removed) this.unpairedOld.delete(id);
+        if (!deleting) {
+            this.pairs.push({ oldId: retained, newId, checked: false, reason: '手动配对' });
+            this.unpairedOld.delete(retained);
+            this.unpairedNew.delete(newId);
+            this.newSelection.set(newId, false);
+            this.pairChecks.set(newId, false);
+            this.selectedOld = retained;
+        }
+        this.repair(false, false);
+        const done = deleting ? `已核验并删除 ${result.removed} 条目标条目。`
+            : `已核验并合并：保留 UID ${retained}，移除 ${result.removed} 条目标副本。`;
+        this.message(done + (saved.note || ''));
     }
 
     rosterPairingOptions(manualPairs = this.pairs.filter(retainedPair)) {

@@ -317,6 +317,23 @@ export function classifyIncoming(oldBook, newBook, pairs = [], reviewTargets, re
     return result;
 }
 
+/** Reuse title matching, with stricter evidence for the entries offered for removal. */
+export function consolidationCandidates(oldBook, newBook, newId, workKeys = []) {
+    const source = newBook?.entries?.[newId];
+    const sourceName = fullNameKey(source?.comment, workKeys);
+    if (!oldBook || !sourceName) return [];
+    const index = rosterIndex(oldBook, workKeys, { includeKeywords: false });
+    const titleCandidates = titleMatches(index, source.comment, workKeys);
+    const compoundSource = compoundTitleNames(source.comment, workKeys).length;
+    return listEntries(oldBook).filter(({ id, entry }) => {
+        if (!titleCandidates.has(id) || !compatibleEntryWorks(source, entry, workKeys)) return false;
+        if (sourceName === fullNameKey(entry.comment, workKeys)) return true;
+        // Treat a joint entry as distinct when it contains another person's name.
+        return !compoundSource && !compoundTitleNames(entry.comment, workKeys).length
+            && sharedPrimaryKeyword(source, entry, workKeys, singleNamePair(source, entry, workKeys));
+    }).map(({ id }) => id);
+}
+
 export function pairChanged(oldBook, newBook, pair, mode) {
     return canonical(oldBook.entries[pair.oldId]) !== canonical(replacement(oldBook.entries[pair.oldId], newBook.entries[pair.newId], mode));
 }
@@ -328,7 +345,7 @@ const originalFields = {
     constant: 'constant', selective: 'selective', order: 'insertion_order', characterFilter: 'character_filter',
 };
 const extensionFields = {
-    displayIndex: 'display_index', position: 'position', depth: 'depth', role: 'role',
+    position: 'position', depth: 'depth', role: 'role',
     excludeRecursion: 'exclude_recursion', preventRecursion: 'prevent_recursion', delayUntilRecursion: 'delay_until_recursion',
     probability: 'probability', useProbability: 'useProbability', selectiveLogic: 'selectiveLogic',
     outletName: 'outlet_name', group: 'group', groupOverride: 'group_override', groupWeight: 'group_weight',
@@ -341,15 +358,22 @@ const extensionFields = {
 
 function syncOriginal(book, id, entry, source, mode, givenOriginal = null) {
     if (!Array.isArray(book.originalData?.entries)) return;
-    const original = givenOriginal || book.originalData.entries.find(x => String(x.id ?? x.uid) === id);
+    const original = givenOriginal || book.originalData.entries.find(x => String(x?.id ?? x?.uid) === id);
     if (!original) return;
     if (mode !== 'settings') original.content = entry.content;
     if (mode === 'content') return;
+    const displayIndex = own(entry, 'displayIndex') ? entry.displayIndex : original.extensions?.display_index;
     for (const [key, dest] of Object.entries(originalFields)) if (own(source, key)) original[dest] = clone(entry[key]);
     if (mode !== 'settings' && record(entry.extensions)) original.extensions = merge(original.extensions || {}, entry.extensions);
     for (const [key, dest] of Object.entries(extensionFields)) if (own(source, key)) {
         if (!record(original.extensions)) original.extensions = {};
         original.extensions[dest] = clone(entry[key]);
+    }
+    if (mode === 'full') {
+        if (displayIndex !== undefined) {
+            if (!record(original.extensions)) original.extensions = {};
+            original.extensions.display_index = clone(displayIndex);
+        } else if (record(original.extensions)) delete original.extensions.display_index;
     }
     if (own(source, 'disable')) original.enabled = !entry.disable;
     if (own(source, 'position')) original.position = entry.position === 0 ? 'before_char' : 'after_char';
@@ -359,10 +383,8 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     validateBook(oldBook); validateBook(newBook);
     if (!['content', 'full'].includes(mode)) throw new Error('未知的替换范围。');
     const next = clone(oldBook), usedOld = new Set(), usedNew = new Set();
-    const additions = (options.additions || []).map(String), forced = new Set((options.forceAdditions || []).map(String));
-    if ((additions.length || forced.size) && !options.merge) throw new Error('请切换到融合模式后再新增条目。');
-    const selectedAdditions = new Set(additions);
-    for (const id of forced) if (!selectedAdditions.has(id)) throw new Error('强制复制条目必须同时列入新增选择。');
+    const additions = (options.additions || []).map(String);
+    if (additions.length && !options.merge) throw new Error('请切换到融合模式后再新增条目。');
     let updated = 0, skipped = 0, added = 0;
     for (const pair of pairs) {
         const oldId = String(pair.oldId), newId = String(pair.newId);
@@ -370,7 +392,6 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
         if (usedOld.has(oldId) || usedNew.has(newId)) throw new Error('配对重复，已停止替换。');
         usedOld.add(oldId); usedNew.add(newId);
         if (pair.checked !== true) continue;
-        if (forced.has(newId)) throw new Error('同一条目不能同时更新和强制复制，请先取消更新。');
         const oldEntry = oldBook.entries[oldId], source = newBook.entries[newId];
         const entry = replacement(oldEntry, source, mode);
         if (canonical(entry) === canonical(oldEntry)) { skipped++; continue; }
@@ -380,7 +401,8 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     }
     const addedPairs = [];
     if (options.merge && additions.length) {
-        const states = classifyIncoming(oldBook, newBook, pairs), approved = new Set((options.approvedNew || []).map(String));
+        const states = classifyIncoming(oldBook, newBook, pairs, undefined, undefined, options.workKeys);
+        const approved = new Set((options.approvedNew || []).map(String));
         const seen = new Set(Object.values(next.entries).map(entrySignature)), requested = new Set(), used = new Set(Object.keys(next.entries));
         if (Array.isArray(next.originalData?.entries)) for (const entry of next.originalData.entries) {
             for (const id of [entry.id, entry.uid]) if (id !== undefined && /^(0|[1-9]\d*)$/.test(String(id))) used.add(String(id));
@@ -393,11 +415,10 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
             if (!own(newBook.entries, newId)) throw new Error('待新增条目已不存在，请重新载入。');
             if (requested.has(newId)) throw new Error('新增条目被重复选择，已停止融合。');
             requested.add(newId);
-            const force = forced.has(newId);
-            if (usedNew.has(newId) && !force) throw new Error('已配对条目不能同时作为新条目加入，请先解除配对。');
-            if (states.get(newId) === 'review' && !approved.has(newId) && !force) throw new Error('存在待处理条目，请先配对或标记为新增。');
+            if (usedNew.has(newId)) throw new Error('已配对条目不能同时作为新条目加入，请先解除配对。');
+            if (states.get(newId) === 'review' && !approved.has(newId)) throw new Error('存在待处理条目，请先配对或标记为新增。');
             const source = newBook.entries[newId], signature = entrySignature(source);
-            if (!force && (states.get(newId) === 'duplicate' || seen.has(signature))) { skipped++; continue; }
+            if (seen.has(signature)) { skipped++; continue; }
             if (total >= 10000) throw new Error('融合后将超过 10000 条，请先拆分世界书。');
             while (used.has(String(uid))) uid++;
             const entry = { ...clone(source), uid, displayIndex: ++displayIndex };
@@ -415,6 +436,52 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
         }
     }
     return { data: validateBook(next), updated, skipped, added, addedPairs };
+}
+
+function matchedSelection(oldBook, newBook, sourceId, targetIds, workKeys) {
+    validateBook(oldBook); validateBook(newBook);
+    const isEntryId = id => typeof id === 'string' || typeof id === 'number';
+    if (![sourceId, ...targetIds].every(isEntryId)) throw new Error('所选条目编号不正确。');
+    const newId = String(sourceId), oldIds = targetIds.map(String);
+    if (new Set(oldIds).size !== oldIds.length) throw new Error('所选目标书条目不可重复。');
+    if (!own(newBook.entries, newId) || !oldIds.every(id => own(oldBook.entries, id))) {
+        throw new Error('所选条目已不存在，请重新载入。');
+    }
+    const candidates = new Set(consolidationCandidates(oldBook, newBook, newId, workKeys));
+    if (!oldIds.every(id => candidates.has(id))) {
+        throw new Error('所选条目中存在无法确认与母本同一身份的记录，请重新核对。');
+    }
+    return { newId, oldIds };
+}
+
+function removeMatchedTargets(data, removedOldIds) {
+    const removals = new Set(removedOldIds);
+    for (const id of removals) delete data.entries[id];
+    if (Array.isArray(data.originalData?.entries)) {
+        data.originalData.entries = data.originalData.entries.filter(entry => {
+            const ids = [entry?.id, entry?.uid].filter(id => id != null).map(String);
+            if (!ids.some(id => removals.has(id))) return true;
+            if (ids.some(id => own(data.entries, id))) throw new Error('世界书导出记录的编号相互冲突，无法安全移除条目。');
+            return false;
+        });
+    }
+    return { data: validateBook(data), removed: removals.size, removedOldIds };
+}
+
+export function buildConsolidation(oldBook, newBook, group, mode = 'content', workKeys = []) {
+    const { newId: sourceId, oldId: retainedId, duplicateOldIds } = group ?? {};
+    if (!Array.isArray(duplicateOldIds) || !duplicateOldIds.length) throw new Error('请至少选择一条要移除的目标书重复条目。');
+    const { newId, oldIds } = matchedSelection(oldBook, newBook, sourceId, [retainedId, ...duplicateOldIds], workKeys);
+    const [oldId, ...removedOldIds] = oldIds;
+    const { data, updated, skipped } = buildUpdate(oldBook, newBook, [{ oldId, newId, checked: true }], mode);
+    return { ...removeMatchedTargets(data, removedOldIds), updated, skipped, oldId, newId };
+}
+
+export function buildMatchedDeletion(oldBook, newBook, group, workKeys = []) {
+    const { newId, oldIds } = group ?? {};
+    if (!Array.isArray(oldIds) || !oldIds.length) throw new Error('请至少选择一条要移除的目标书条目。');
+    const { oldIds: removedOldIds } = matchedSelection(oldBook, newBook, newId, oldIds, workKeys);
+    return removeMatchedTargets(clone(oldBook), removedOldIds);
 }
 
 
@@ -987,7 +1054,7 @@ export function buildResolvedRosterUpdate(oldBook, newBook, { pairs, additions, 
         const targetTitle = oldBook.entries[pair.oldId].comment;
         replace.push(compoundTitleNames(targetTitle, workKeys).length ? `${name} → 「${targetTitle}」（更新整条）` : name);
     }
-    const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions });
+    const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions, workKeys });
     return {
         result, replace, unchanged, review, missing,
         copy: result.addedPairs.map(pair => namesById.get(pair.newId)),
