@@ -1,4 +1,4 @@
-const VERSION = '1.10.3';
+const VERSION = '1.10.4';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
 import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
@@ -297,8 +297,12 @@ export class UpdaterWindow {
                     if (this.visibleSourceSet.has(sourceId)) this.visibleCopyCount += change;
                     if (pair && this.inScope(pair.newId) && this.changed(pair)) this.selectedUpdateCount += change;
                 }
-                this.updateSelectionRows(sourceId, event.target.checked);
                 this.selectionCountsValid = true;
+                if (this.pinMatches && pair && wasSelected !== event.target.checked) {
+                    this.render();
+                    return;
+                }
+                this.updateSelectionRows(sourceId, event.target.checked);
                 this.renderSelectionSummary();
                 if (this.find('.stwu-settings').open && this.find('[data-set-scope]').value === 'checked') this.renderSettingsInfo();
             });
@@ -873,11 +877,9 @@ export class UpdaterWindow {
         const pinned = new Set();
         let rows = book ? listEntries(book) : [];
         if (pinning) {
-            // 命中 = 名单命中或已配对；块内顺序按母本，母本里先出现的排前面。
-            const scopedIds = this.scopeNames.length
-                ? listEntries(this.newBook).filter(({ id }) => this.inScope(id)).map(({ id }) => id)
-                : [];
-            const block = pinBlock(listEntries(this.newBook), this.pairs, side, scopedIds);
+            const sourceRows = side === 'new' ? rows : listEntries(this.newBook);
+            const scopedIds = this.scopeNames.length ? sourceRows.filter(({ id }) => this.inScope(id)).map(({ id }) => id) : [];
+            const block = pinBlock(sourceRows, this.pairs, side, scopedIds, pair => this.isEntryChecked(pair.newId));
             for (const id of block) pinned.add(String(id));
             rows = orderWithPinned(rows, block);
         }
