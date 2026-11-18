@@ -543,8 +543,8 @@ export function scopeMatch(entry, names, workKeys = []) {
 }
 
 /** 名单支持作品别名、分隔符拆分，以及整行 JSON 字符串字面名。 */
-export function parseNameList(text) {
-    const names = [], works = [];
+export function parseNameList(text, { includeGroups = false } = {}) {
+    const groups = [], works = [];
     for (const line of String(text ?? '').split(/[\n\r]+/)) {
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -552,7 +552,7 @@ export function parseNameList(text) {
             try {
                 const literal = JSON.parse(trimmed);
                 if (typeof literal === 'string') {
-                    if (literal.trim()) names.push(literal.trim());
+                    if (literal.trim()) groups.push([literal.trim()]);
                     continue;
                 }
             } catch { /* 按普通名单行处理。 */ }
@@ -564,9 +564,112 @@ export function parseNameList(text) {
             }
             continue;
         }
-        for (const item of trimmed.split(/[、,，;；|｜=＝]+/)) if (item.trim()) names.push(item.trim());
+        for (const item of trimmed.split(/[、,，;；|｜]+/)) {
+            const aliases = item.split(/[=＝]+/).map(name => name.trim()).filter(Boolean);
+            if (aliases.length) groups.push(aliases);
+        }
     }
-    return { names: [...new Set(names)], works: [...new Set(works)] };
+    const result = { names: [...new Set(groups.flat())], works: [...new Set(works)] };
+    return includeGroups ? { ...result, groups } : result;
+}
+
+function rosterNameKeys(name, workKeys) {
+    const base = splitCategoryPrefix(name, workKeys) || name;
+    return [...labelVariants(base), parseScopedName(name, workKeys).key, compactName(name)].filter(Boolean);
+}
+
+function rosterIndex(book, workKeys, includeKeywords = true) {
+    const index = new Map();
+    for (const [id, entry] of Object.entries(book.entries)) {
+        const names = includeKeywords ? entry : { comment: entry.comment };
+        for (const key of entryNameCandidates(names, workKeys)) {
+            if (!index.has(key)) index.set(key, []);
+            index.get(key).push(id);
+        }
+    }
+    return index;
+}
+
+function rosterHits(index, keys) {
+    return new Set([...new Set(keys)].flatMap(key => index.get(key) || []));
+}
+
+export function buildRosterUpdate(oldBook, newBook, groups, mode, {
+    workKeys = [], manualPairs = [], unpairedOld = new Set(), unpairedNew = new Set(),
+} = {}) {
+    const sourceIndex = rosterIndex(newBook, workKeys);
+    const targetIndex = rosterIndex(oldBook, workKeys);
+    const targetTitles = rosterIndex(oldBook, workKeys, false);
+    const targetSignatures = new Set(Object.values(oldBook.entries).map(keySignature).filter(Boolean));
+    const sourceSignatureCounts = new Map();
+    for (const source of Object.values(newBook.entries)) {
+        const signature = keySignature(source);
+        if (signature) sourceSignatureCounts.set(signature, (sourceSignatureCounts.get(signature) || 0) + 1);
+    }
+    const overrides = new Map(manualPairs.map(pair => [pair.newId, pair.oldId]));
+    const manualOwners = new Map(manualPairs.map(pair => [pair.oldId, pair.newId]));
+    const entries = new Map(), review = [], missing = [];
+    for (const aliases of groups) {
+        const name = aliases.join(' / ');
+        const keys = aliases.flatMap(alias => rosterNameKeys(alias, workKeys));
+        const sources = rosterHits(sourceIndex, keys);
+        if (!sources.size) { missing.push(name); continue; }
+        if (sources.size > 1) { review.push(`${name}（母本有多个匹配条目）`); continue; }
+        const newId = sources.values().next().value;
+        if (!entries.has(newId)) entries.set(newId, { name, keys: new Set() });
+        for (const key of keys) entries.get(newId).keys.add(key);
+    }
+
+    const matched = [], additions = [], claims = new Map();
+    for (const [newId, item] of entries) {
+        const source = newBook.entries[newId];
+        const keys = [...item.keys, ...entryNameCandidates({ comment: source.comment }, workKeys)];
+        const namedTargets = rosterHits(targetTitles, keys);
+        // A source keyword matching a target title is evidence of a possible alias.
+        for (const oldId of rosterHits(targetTitles, entryNameCandidates({ key: source.key }, workKeys))) namedTargets.add(oldId);
+        const targets = rosterHits(targetIndex, keys);
+        for (const oldId of namedTargets) targets.add(oldId);
+        if (overrides.has(newId)) {
+            targets.clear();
+            targets.add(overrides.get(newId));
+        }
+        if (unpairedNew.has(newId) || [...targets].some(id => unpairedOld.has(id))) {
+            review.push(`${item.name}（已手动解除配对）`);
+        } else if ([...targets].some(id => manualOwners.has(id) && manualOwners.get(id) !== newId)) {
+            review.push(`${item.name}（目标条目已有其他手动配对）`);
+        } else if (targets.size > 1) {
+            review.push(`${item.name}（目标书有多个匹配条目）`);
+        } else if (!targets.size) {
+            const signature = keySignature(source);
+            if (sourceSignatureCounts.get(signature) === 1 && targetSignatures.has(signature)) {
+                review.push(`${item.name}（目标书有主关键词完全相同、标题不同的条目）`);
+            } else additions.push(newId);
+        } else {
+            const oldId = targets.values().next().value;
+            if (!overrides.has(newId) && !namedTargets.has(oldId) && oldBook.entries[oldId].comment?.trim()) {
+                review.push(`${item.name}（目标条目只有关键词命中，标题不同）`);
+                continue;
+            }
+            matched.push({ oldId, newId, checked: true });
+            claims.set(oldId, (claims.get(oldId) || 0) + 1);
+        }
+    }
+
+    const pairs = matched.filter(pair => {
+        if (claims.get(pair.oldId) === 1) return true;
+        review.push(`${entries.get(pair.newId).name}（与另一角色匹配到同一目标条目）`);
+        return false;
+    });
+    const replace = [], unchanged = [];
+    for (const pair of pairs) {
+        const names = pairChanged(oldBook, newBook, pair, mode) ? replace : unchanged;
+        names.push(entries.get(pair.newId).name);
+    }
+    const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions });
+    return {
+        result, replace, unchanged, review, missing,
+        copy: result.addedPairs.map(pair => entries.get(pair.newId).name),
+    };
 }
 
 export function scopedEntries(book, names, workKeys = []) {
