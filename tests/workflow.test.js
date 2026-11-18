@@ -38,6 +38,21 @@ test('简称重名需要核对，并且不同全名不会因为首段相同而�
     assert.deepEqual(fromShort.result.data.entries[1], other);
 });
 
+test('琴与琴·古恩希尔德配对，单字简称遇到多条全名时待核对', () => {
+    const target = makeBook([{ uid: 0, comment: '琴', key: ['琴', '琴团长', '琴團長', '代理团长'], content: '旧正文' }]);
+    const jean = { uid: 10, comment: '琴·古恩希尔德', key: ['琴·古恩希尔德', '蒲公英骑士', '狮牙骑士', '代理团长'], content: '完整正文' };
+    const mother = makeBook([jean]);
+    for (const name of ['琴', '琴·古恩希尔德', '原神·琴']) {
+        const plan = buildRosterUpdate(target, mother, [[name]], 'content');
+        assert.deepEqual(plan.replace, [name]);
+        assert.equal(plan.result.added, 0);
+        assert.equal(plan.result.data.entries[0].content, '完整正文');
+    }
+    const conflict = buildRosterUpdate(target, makeBook([jean, { ...jean, uid: 11, comment: '琴·另一人', key: [] }]), [['琴']], 'content');
+    assert.match(conflict.review[0], /母本有多个匹配/);
+    assert.equal(conflict.result.updated + conflict.result.added, 0);
+});
+
 for (const count of [100, 50, 3, 0]) {
     test(`100 人名单更新已有 ${count} 人的目标书，重复执行不新增`, () => {
         const candidates = Array.from({ length: 1000 }, (_, i) => ({

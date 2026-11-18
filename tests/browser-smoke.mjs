@@ -343,16 +343,22 @@ try {
 
     // Roster preview and a single verified write.
     reset(); {
-        state.books.get('演示_目标书').entries[0].comment = '原神·丽莎';
-        state.books.get('演示_母本').entries[90].comment = '丽莎·敏兹';
-        state.books.get('演示_目标书').entries[0].key = [];
-        state.books.get('演示_母本').entries[90].key = [];
+        Object.assign(state.books.get('演示_目标书').entries[0], {
+            comment: '琴', key: ['琴', '琴团长', '琴團長', '代理团长'],
+        });
+        Object.assign(state.books.get('演示_母本').entries[90], {
+            comment: '琴·古恩希尔德', key: ['琴·古恩希尔德', '蒲公英骑士', '狮牙骑士', '代理团长'],
+        });
         const motherBefore = structuredClone(state.books.get('演示_母本'));
         const { page, ctx, errors } = await prepare(320, 568, null, true);
         await openTool(page, 'stwu-scope');
         const input = page.locator('[data-scope]');
-        await input.fill('丽莎\n新增条目\n无变化\n共同标题\n找不到角色');
+        await input.fill('琴\n新增条目\n无变化\n共同标题\n找不到角色');
         await input.press('Tab');
+        const sourceStatus = page.locator('[data-list="new"] [data-id="90"] .stwu-entry-status');
+        const targetStatus = page.locator('[data-list="old"] [data-id="0"] .stwu-entry-status');
+        assert.match(await sourceStatus.textContent(), /配对 \d+ · 有变化/);
+        assert.equal(await targetStatus.textContent(), await sourceStatus.textContent());
         const previewButton = page.getByRole('button', { name: '按名单更新', exact: true });
         const dialog = page.locator('[data-roster-dialog]');
         const confirm = page.getByRole('button', { name: '确认更新', exact: true });
@@ -361,7 +367,7 @@ try {
         assert.equal(await dialog.isVisible(), true);
         assert.match(await dialog.locator('[data-roster-summary]').textContent(), /替换 1 · 复制 1 · 无变化 1 · 待核对 1 · 母本未找到 1/);
         const details = await dialog.locator('[data-roster-report]').textContent();
-        for (const name of ['丽莎', '新增条目', '无变化', '共同标题', '找不到角色']) assert.ok(details.includes(name));
+        for (const name of ['琴', '新增条目', '无变化', '共同标题', '找不到角色']) assert.ok(details.includes(name));
         assert.equal(state.writes, 0);
         await page.keyboard.press('Escape');
         assert.equal(await dialog.isVisible(), false);
@@ -371,6 +377,7 @@ try {
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换 1 条，复制 1 条'));
         assert.equal(state.writes, 1);
         const target = state.books.get('演示_目标书');
+        assert.equal(target.entries[0].comment, '琴');
         assert.equal(target.entries[0].content, newer.entries[90].content);
         assert.equal(target.entries[0].order, 100);
         assert.equal(target.entries[1].content, old.entries[1].content);
@@ -381,7 +388,7 @@ try {
         assert.equal(await confirm.isVisible(), false);
         assert.equal(state.writes, 1);
         assert.deepEqual(errors, []);
-        results.push('320px 名单预览、丽莎全名与简称替换、取消、一次写入及重复执行通过');
+        results.push('320px 名单中琴的单字简称、双栏配对、预览、写入及重复执行通过');
         await ctx.close();
     }
 
