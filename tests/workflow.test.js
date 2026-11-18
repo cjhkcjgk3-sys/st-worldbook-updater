@@ -1,11 +1,91 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    applySettingsPatch, autoMatchScoped, buildSettingsPatch, buildUpdate,
-    pickSettings, scopedEntries, setBookEntrySettings,
+    applySettingsPatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate,
+    parseNameList, pickSettings, scopedEntries, setBookEntrySettings,
 } from '../core.js';
 
 const makeBook = rows => ({ entries: Object.fromEntries(rows.map(row => [String(row.uid), row])), label: 'keep' });
+
+for (const count of [100, 50, 3, 0]) {
+    test(`100 人名单更新已有 ${count} 人的目标书，重复执行不新增`, () => {
+        const candidates = Array.from({ length: 1000 }, (_, i) => ({
+            uid: i + 1000, comment: `角色 ${i}`, key: ['通用触发词'], content: `完整正文 ${i}`, order: 250,
+        }));
+        const mother = makeBook(candidates);
+        const target = makeBook(candidates.slice(0, count).map((entry, uid) => ({
+            uid, comment: entry.comment, key: [], content: uid % 2 ? '' : '不完整', order: 50,
+        })));
+        if (count) target.entries[500] = { uid: 500, comment: '名单外条目', content: '保留' };
+        const { groups } = parseNameList(candidates.slice(0, 100).map(entry => entry.comment).join('\n'), { includeGroups: true });
+        const plan = buildRosterUpdate(target, mother, groups, 'content');
+        assert.equal(plan.replace.length, count);
+        assert.equal(plan.copy.length, 100 - count);
+        assert.deepEqual([plan.missing, plan.review, plan.unchanged], [[], [], []]);
+        assert.equal(Object.keys(plan.result.data.entries).length, count ? 101 : 100);
+        assert.equal(plan.result.data.label, 'keep');
+        assert.deepEqual(plan.result.data.entries[500], target.entries[500]);
+        const byName = new Map(Object.values(plan.result.data.entries).map(entry => [entry.comment, entry]));
+        for (const [i, source] of candidates.slice(0, 100).entries()) {
+            const entry = byName.get(source.comment);
+            assert.equal(entry.content, source.content);
+            assert.equal(entry.order, i < count ? 50 : 250);
+            if (i < count) assert.equal(entry.uid, i);
+        }
+        assert.equal(byName.has(candidates[100].comment), false);
+        const again = buildRosterUpdate(plan.result.data, mother, groups, 'content');
+        assert.equal(again.result.updated + again.result.added, 0);
+        assert.equal(again.unchanged.length, 100);
+    });
+}
+
+test('名单识别两侧别名，缺失、重名和争抢目标的条目等待核对', () => {
+    const row = (uid, comment, key = []) => ({ uid, comment, key, content: '正文', order: 1 });
+    const mother = makeBook([
+        row(10, '甲'), row(11, '乙'), row(12, '乙'),
+        row(13, '丙'), row(14, '丁'), row(15, '戊'), row(16, '己'), row(17, '庚'),
+        row(18, '辛', ['专属关键词']),
+    ]);
+    const target = makeBook([
+        { ...row(0, 'Alpha'), order: 42 },
+        row(1, '丙'), row(2, '丙'),
+        row(3, '丁（戊）'), row(4, '既有条目', ['庚']),
+        row(5, '另一标题', ['专属关键词']),
+    ]);
+    const { groups } = parseNameList('甲=Alpha\n乙\n丙\n丁\n戊\n己\n庚\n辛\n缺失', { includeGroups: true });
+    const plan = buildRosterUpdate(target, mother, groups, 'full');
+    assert.deepEqual(plan.replace, ['甲 / Alpha']);
+    assert.deepEqual(plan.copy, ['己']);
+    assert.deepEqual(plan.missing, ['缺失']);
+    assert.equal(plan.review.length, 6);
+    assert.match(plan.review.find(name => name.startsWith('庚')), /标题不同/);
+    assert.match(plan.review.find(name => name.startsWith('丁')), /同一目标/);
+    assert.match(plan.review.find(name => name.startsWith('辛')), /主关键词完全相同/);
+    assert.equal(plan.result.data.entries[0].comment, '甲');
+    assert.equal(plan.result.data.entries[0].uid, 0);
+    assert.equal(plan.result.data.entries[0].order, 1);
+    assert.deepEqual(plan.result.data.entries[3], target.entries[3]);
+    assert.deepEqual(plan.result.data.entries[4], target.entries[4]);
+    assert.deepEqual(plan.result.data.entries[5], target.entries[5]);
+    const again = buildRosterUpdate(plan.result.data, mother, groups, 'full');
+    assert.deepEqual(again.unchanged, ['甲 / Alpha', '己']);
+    assert.equal(again.result.updated + again.result.added, 0);
+});
+
+test('名单尊重手动配对和解除决定，并保护名单外的手动配对目标', () => {
+    const row = (uid, comment, content) => ({ uid, comment, content });
+    const mother = makeBook([row(10, '甲', '新'), row(11, '乙', '新'), row(12, '名单外', '新')]);
+    const target = makeBook([row(0, '甲', '旧 0'), row(1, '甲', '旧 1'), row(2, '乙', '旧 2')]);
+    const manualPairs = [{ oldId: '1', newId: '10' }, { oldId: '2', newId: '12' }];
+    const plan = buildRosterUpdate(target, mother, [['甲'], ['乙']], 'content', { manualPairs });
+    assert.deepEqual(plan.replace, ['甲']);
+    assert.match(plan.review[0], /乙.*其他手动配对/);
+    assert.equal(plan.result.data.entries[1].content, '新');
+    assert.equal(plan.result.data.entries[0].content, '旧 0');
+    const blocked = buildRosterUpdate(target, mother, [['乙']], 'content', { unpairedNew: new Set(['11']) });
+    assert.match(blocked.review[0], /解除配对/);
+    assert.equal(blocked.result.added + blocked.result.updated, 0);
+});
 
 test('名单批量调整母本后一次更新五项并复制四十五项', () => {
     const target = makeBook(Array.from({ length: 5 }, (_, i) => ({

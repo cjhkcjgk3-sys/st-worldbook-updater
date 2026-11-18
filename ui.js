@@ -1,7 +1,7 @@
-const VERSION = '1.9.0';
+const VERSION = '1.10.0';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, unmatchedNames, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -112,13 +112,13 @@ export class UpdaterWindow {
                 </div>
               </details>
               <details class="stwu-tool stwu-scope">
-                <summary class="menu_button"><i class="fa-solid fa-bullseye" aria-hidden="true"></i><span>定点名单</span><span class="stwu-scope-state" data-scope-state>整本参与</span></summary>
+                <summary class="menu_button"><i class="fa-solid fa-bullseye" aria-hidden="true"></i><span>定点名单</span><span class="stwu-scope-state" data-scope-state>未填写</span></summary>
                 <div class="stwu-tool-content stwu-scope-content">
-                  <label for="stwu-scope-input">名单限定替换范围；搜索只改变列表显示。</label>
-                  <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。留空则整本参与。"></textarea>
+                  <label for="stwu-scope-input">填写目标书应收录的人名，再点底部「按名单更新」。</label>
+                  <textarea class="text_pole" id="stwu-scope-input" data-scope rows="2" placeholder="每行一个名字；可先写一行「作品别名：原神=Genshin」用于去掉名字里的作品前缀。"></textarea>
                   <div class="stwu-scope-actions"><button type="button" class="menu_button" data-action="copy-names">复制母本条目名</button><label class="stwu-scope-pin"><input type="checkbox" data-scope-pin checked><span>匹配置顶（仅显示）</span></label></div>
                   <p class="stwu-scope-report" data-scope-report role="status"></p>
-                  <details class="stwu-scope-spec"><summary>名单格式说明</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>形态/皮肤自动归到主名下。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol><p>没命中的名字只会列在报告里，不会参与替换。</p></details>
+                  <details class="stwu-scope-spec"><summary>名单格式说明</summary><ol><li>每行一个角色名，写全名，不带编号、书名号、引号和说明文字。</li><li>别名或英文名写在括号里或跟在等号后。</li><li>同名或形态匹配不明确时，预览会列出待核对的人名。</li><li>不要写作品名；要写需声明“作品别名：原神=Genshin”。</li></ol></details>
                 </div>
               </details>
               <details class="stwu-tool stwu-settings">
@@ -191,9 +191,18 @@ export class UpdaterWindow {
             </div>
             <footer class="stwu-footer">
               <label class="stwu-replace-scope">替换范围<select class="text_pole" data-mode aria-label="替换范围"><option value="content">仅正文</option><option value="full">完整条目</option></select></label>
-              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button></div>
+              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button><button type="button" class="menu_button stwu-primary" data-action="preview-roster" hidden>按名单更新</button></div>
             </footer>
-          </div></div>`;
+          </div></div>
+          <dialog class="stwu-roster-dialog" aria-labelledby="stwu-roster-heading" data-roster-dialog>
+            <h3 id="stwu-roster-heading">按名单更新</h3>
+            <p data-roster-summary></p>
+            <pre class="stwu-content stwu-roster-report" data-roster-report tabindex="0"></pre>
+            <div class="stwu-roster-actions">
+              <button type="button" class="menu_button" data-action="close-roster" autofocus>返回</button>
+              <button type="button" class="menu_button stwu-primary" data-action="save-roster">确认更新</button>
+            </div>
+          </dialog>`;
         try {
             if (globalThis.localStorage.getItem(MOTHER_SIDE_KEY) === 'right') this.swapColumns();
         } catch {
@@ -203,7 +212,11 @@ export class UpdaterWindow {
         for (const tool of this.dialog.querySelectorAll('.stwu-tool')) this.on(tool, 'toggle', () => {
             if (tool.open) for (const other of this.dialog.querySelectorAll('.stwu-tool')) if (other !== tool) other.open = false;
         });
-        this.on(this.dialog, 'cancel', event => { event.preventDefault(); if (!this.busy) this.hide(); });
+        this.on(this.dialog, 'cancel', event => {
+            if (event.target !== this.dialog) return;
+            event.preventDefault(); if (!this.busy) this.hide();
+        });
+        this.on(this.find('[data-roster-dialog]'), 'cancel', () => { this.rosterPreview = null; });
         this.on(this.dialog, 'click', event => {
             if (!event.target.closest('.stwu-tool')) this.closeTools();
             const pairBtn = event.target.closest('[data-pair-btn]');
@@ -238,6 +251,15 @@ export class UpdaterWindow {
             if (action === 'file') this.find('[data-file]').click();
             if (action === 'replace') this.run(() => this.apply());
             if (action === 'copy') this.run(() => this.copySelected());
+            if (action === 'preview-roster') this.run(() => this.previewRoster());
+            if (action === 'close-roster') {
+                this.rosterPreview = null;
+                this.find('[data-roster-dialog]').close();
+            }
+            if (action === 'save-roster') {
+                this.find('[data-roster-dialog]').close();
+                this.run(() => this.saveRoster());
+            }
             if (action === 'toggle-selection') this.toggleFilteredSelection();
             if (action === 'copy-names') this.run(() => this.copySourceNames());
             if (action === 'apply-settings') this.run(() => this.applySettingsToMother());
@@ -499,7 +521,7 @@ export class UpdaterWindow {
         this.scopeWorks = works;
         this.scopeWorkKeys = workKeysOf(works);
         this.repair();
-        this.message(this.scopeText() || '未设置定点名单：整本参与替换。复制所选条目不受名单限制。');
+        this.message(this.scopeText() || '定点名单为空。可手动勾选条目，再复制或替换。');
         this.render();
         for (const side of ['old', 'new']) this.find(`[data-list="${side}"]`).scrollTop = 0;
     }
@@ -670,23 +692,8 @@ export class UpdaterWindow {
 
     scopeText() {
         if (!this.scopeNames.length || !this.newBook) return '';
-        const workKeys = workKeysOf(this.scopeWorks);
-        const hit = Object.values(this.newBook.entries).filter(entry => scopeMatch(entry, this.scopeNames, workKeys)).length;
-        const paired = new Set(this.pairs.filter(pair => this.inScope(pair.newId)).map(pair => pair.newId));
-        let unpaired = 0, blocked = 0, duplicate = 0;
-        for (const [id, state] of this.incoming()) {
-            if (!this.inScope(id) || paired.has(id)) continue;
-            unpaired++;
-            if (state === 'duplicate') duplicate++;
-            if (state === 'review') blocked++;
-        }
-        const missing = unmatchedNames(this.newBook, this.scopeNames, workKeys);
-        const parts = [`名单 ${this.scopeNames.length} 个${this.scopeWorks.length ? `（作品 ${this.scopeWorks.length} 个）` : ''} → 命中 ${hit} 条`, `范围内已配对 ${paired.size} 组，可参与替换`];
-        if (unpaired) parts.push(`${unpaired} 条未配对，需手动配对后才能替换`);
-        if (blocked) parts.push(`其中 ${blocked} 条待核对`);
-        if (duplicate) parts.push(`另有 ${duplicate} 条内容重复`);
-        if (missing.length) parts.push(`名单未找到 ${missing.length} 个：${missing.slice(0, 6).join('、')}${missing.length > 6 ? '…' : ''}`);
-        return parts.join('；');
+        const hit = Object.values(this.newBook.entries).filter(entry => scopeMatch(entry, this.scopeNames, this.scopeWorkKeys)).length;
+        return `母本命中 ${hit} 条。打开「按名单更新」查看处理结果。`;
     }
 
     invalidateIncoming() { this.incomingCache = null; }
@@ -915,7 +922,7 @@ export class UpdaterWindow {
     renderControls() {
         for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
         this.find('[data-scope-report]').textContent = this.scopeText();
-        this.find('[data-scope-state]').textContent = this.scopeNames.length ? `限定 ${this.scopeNames.length} 个名字` : '整本参与';
+        this.find('[data-scope-state]').textContent = this.scopeNames.length ? '已填写' : '未填写';
         if (!this.selectionCountsValid) this.refreshSelectionCounts();
         for (const side of ['old', 'new']) {
             this.find(`[data-page-size="${side}"]`).value = String(this.pageSize[side]);
@@ -944,12 +951,20 @@ export class UpdaterWindow {
 
     renderSelectionSummary() {
         if (!this.selectionCountsValid) this.refreshSelectionCounts();
+        const hasRoster = this.scopeNames.length > 0;
         const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedCopyCount} 条 · 当前结果可复制 ${this.visibleCopyCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;
-        for (const node of this.dialog.querySelectorAll('.stwu-selection')) node.textContent = node.classList.contains('stwu-selection-compact')
-            ? (this.busy ? '处理中…' : `已选 ${this.selectedCopyCount} · 可替换 ${this.selectedUpdateCount}`)
-            : summary;
+        for (const node of this.dialog.querySelectorAll('.stwu-selection')) {
+            if (hasRoster && !this.busy) node.textContent = `已勾选 ${this.selectedCopyCount} 条`;
+            else node.textContent = node.classList.contains('stwu-selection-compact')
+                ? (this.busy ? '处理中…' : `已选 ${this.selectedCopyCount} · 可替换 ${this.selectedUpdateCount}`)
+                : summary;
+        }
         const copy = this.find('[data-action="copy"]');
         const replace = this.find('[data-action="replace"]');
+        const roster = this.find('[data-action="preview-roster"]');
+        copy.hidden = replace.hidden = hasRoster;
+        roster.hidden = !hasRoster;
+        roster.disabled = this.busy || this.service.requiresReload || !this.oldBook || !this.newBook;
         copy.textContent = `复制所选${this.visibleCopyCount ? ` (${this.visibleCopyCount})` : ''}`;
         replace.textContent = `替换所选${this.selectedUpdateCount ? ` (${this.selectedUpdateCount})` : ''}`;
         copy.disabled = this.busy || !!this.service.requiresReload || !this.visibleCopyCount || !this.oldBook;
@@ -1066,6 +1081,50 @@ export class UpdaterWindow {
         this.selectionCountsValid = false;
         this.invalidateIncoming();
         this.message(`已核验：复制 ${result.added} 条。${hidden ? `搜索隐藏的 ${hidden} 条仍保留勾选，未复制。` : ''}${saved.note || ''}`);
+    }
+
+    previewRoster() {
+        const { groups } = parseNameList(this.find('[data-scope]').value, { includeGroups: true });
+        if (!groups.length || !this.oldBook || !this.newBook) return;
+        const plan = buildRosterUpdate(this.oldBook, this.newBook, groups, this.mode, {
+            workKeys: this.scopeWorkKeys,
+            manualPairs: this.pairs.filter(pair => pair.reason === '手动配对' || pair.reason === '本次新增'),
+            unpairedOld: this.unpairedOld,
+            unpairedNew: this.unpairedNew,
+        });
+        this.rosterPreview = { plan, before: this.oldBook, target: this.oldName };
+        const sections = [
+            ['替换', plan.replace], ['复制', plan.copy], ['无变化', plan.unchanged],
+            ['待核对', plan.review], ['母本未找到', plan.missing],
+        ];
+        const mode = this.mode === 'content' ? '仅正文' : '完整条目';
+        this.find('[data-roster-summary]').textContent = `母本「${this.newName}」 → 目标书「${this.oldName}」 · 替换范围：${mode}。\n`
+            + sections.map(([label, names]) => `${label} ${names.length}`).join(' · ');
+        this.find('[data-roster-report]').textContent = sections.filter(([, names]) => names.length)
+            .map(([label, names]) => `${label}\n${names.join('\n')}`).join('\n\n');
+        this.find('[data-action="save-roster"]').hidden = !(plan.result.updated || plan.result.added);
+        const dialog = this.find('[data-roster-dialog]');
+        dialog.showModal();
+        this.find('[data-roster-report]').scrollTop = 0;
+    }
+
+    async saveRoster() {
+        const preview = this.rosterPreview;
+        this.rosterPreview = null;
+        if (!preview) return;
+        if (preview.target !== this.oldName || preview.before !== this.oldBook) {
+            throw new Error('目标书在预览后已变化，请重新预览。');
+        }
+        const { plan } = preview;
+        const { result } = plan;
+        if (!(result.updated || result.added)) return;
+        this.message('正在写入并核验目标书…');
+        const saved = await this.service.updateDirect(preview.target, preview.before, result.data);
+        this.oldBook = saved.data;
+        if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
+        this.pairs.push(...result.addedPairs);
+        this.repair();
+        this.message(`已核验：替换 ${result.updated} 条，复制 ${result.added} 条，无变化 ${plan.unchanged.length} 条，待核对 ${plan.review.length} 个，母本未找到 ${plan.missing.length} 个。${saved.note || ''}`);
     }
 
     destroy() {
