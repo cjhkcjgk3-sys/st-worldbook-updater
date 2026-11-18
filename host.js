@@ -20,7 +20,7 @@ function checkNativeEditor(name) {
     const selected = select.selectedOptions?.[0] ?? select.options?.[select.selectedIndex];
     const selectedName = selected?.textContent;
     if (typeof selectedName !== 'string') throw new Error('无法确认原生世界书编辑器的选择，已停止写入。');
-    if (selectedName === name) throw new Error('目标书正在原生世界书编辑器中打开，可能有未保存条目。请先在原生世界书编辑器切换到其他书或取消选择，再重试。');
+    if (selectedName === name) throw new Error(`「${name}」正在原生世界书编辑器中打开，可能有未保存条目。请先在原生世界书编辑器切换到其他书或取消选择，再重试。`);
 }
 
 export class WorldbookService {
@@ -68,9 +68,9 @@ export class WorldbookService {
     async assertCurrent(name, expected) {
         if (this.disabled) throw new Error('插件已关闭，操作已停止。');
         if (this.requiresReload) throw new Error('上次操作的状态需要核对，请先保存或导出未保存内容，再刷新酒馆同步状态。');
-        if (!(await this.list()).some(x => x.name === name)) throw new Error('原世界书已被删除或改名，请重新选择。');
+        if (!(await this.list()).some(x => x.name === name)) throw new Error(`「${name}」已被删除或改名，请重新选择。`);
         const actual = await this.read(name);
-        if (canonical(actual) !== canonical(expected)) throw new Error('原世界书在预览后发生了变化，请点击“重新载入”再配对。');
+        if (canonical(actual) !== canonical(expected)) throw new Error(`「${name}」在预览后发生了变化，请点击「重新载入」再配对。`);
         return actual;
     }
 
@@ -92,7 +92,7 @@ export class WorldbookService {
         const current = this.cacheState(cache, name, afterWrite);
         if (current.present !== expected.present || current.value !== expected.value) {
             this.requiresReload = true;
-            throw new Error((afterWrite ? '写入期间' : '等待期间') + '目标书的酒馆缓存发生变化，未覆盖该缓存。请先保存或导出未保存内容，再核对服务器和缓存并刷新酒馆。');
+            throw new Error(`${afterWrite ? '写入期间' : '等待期间'}「${name}」的酒馆缓存发生变化，未覆盖该缓存。请先保存或导出未保存内容，再核对服务器和缓存并刷新酒馆。`);
         }
     }
 

@@ -79,6 +79,7 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-scope-state, .stwu-settings-state { margin-left: auto; color: var(--wu-em); font-size: .82em; }
 .stwu-pair-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .stwu-pair-actions .menu_button { min-height: 34px; padding: 4px 10px; font-size: .84em; }
+.stwu-pair-actions .menu_button, .stwu-scope-actions .menu_button { width: auto; white-space: nowrap; }
 .stwu-pairhint { color: var(--wu-em); font-size: .78em; }
 .stwu-scope-content > label { color: var(--wu-em); font-size: .78em; }
 .stwu-scope textarea { min-height: 72px; max-height: 24dvh; }
