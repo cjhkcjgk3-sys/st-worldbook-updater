@@ -1,7 +1,7 @@
-const VERSION = '1.10.1';
+const VERSION = '1.10.2';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, autoMatchScoped, buildRosterUpdate, buildSettingsPatch, buildUpdate, cleanEntryName, classifyIncoming, clone, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -41,6 +41,7 @@ export class UpdaterWindow {
         this.splitMode = 'balanced';
         this.mode = 'content';
         this.scopeNames = [];
+        this.scopeGroups = [];
         this.scopeWorks = [];
         this.scopeWorkKeys = workKeysOf(this.scopeWorks);
         this.pinMatches = true;
@@ -498,8 +499,11 @@ export class UpdaterWindow {
         const previous = new Map(this.pairs.map(pair => [pair.newId, pair]));
         const manual = this.pairs.filter(pair => (pair.reason === '手动配对' || pair.reason === '本次新增') && oldEntries[pair.oldId] && newEntries[pair.newId]);
         const usedOld = new Set(manual.map(pair => pair.oldId)), usedNew = new Set(manual.map(pair => pair.newId));
+        const roster = this.scopeGroups?.length
+            ? matchRosterEntries(this.oldBook, this.newBook, this.scopeGroups, this.rosterPairingOptions(manual)).pairs
+            : [];
         const scoped = this.scopeNames.length ? autoMatchScoped(this.oldBook, this.newBook, this.scopeNames, workKeysOf(this.scopeWorks)) : [];
-        const proposals = [...scoped, ...autoMatch(this.oldBook, this.newBook)];
+        const proposals = [...roster, ...scoped, ...autoMatch(this.oldBook, this.newBook)];
         const pairs = [...manual];
         for (const pair of proposals) {
             if (usedOld.has(pair.oldId) || usedNew.has(pair.newId) || this.unpairedOld.has(pair.oldId) || this.unpairedNew.has(pair.newId)) continue;
@@ -513,11 +517,12 @@ export class UpdaterWindow {
     }
 
     applyScope() {
-        const { names, works } = parseNameList(this.find('[data-scope]').value);
-        const sameNames = names.length === this.scopeNames.length && names.every((name, index) => name === this.scopeNames[index]);
+        const { names, works, groups } = parseNameList(this.find('[data-scope]').value, { includeGroups: true });
+        const sameGroups = JSON.stringify(groups) === JSON.stringify(this.scopeGroups);
         const sameWorks = works.length === this.scopeWorks.length && works.every((work, index) => work === this.scopeWorks[index]);
-        if (sameNames && sameWorks) return;
+        if (sameGroups && sameWorks) return;
         this.scopeNames = names;
+        this.scopeGroups = groups;
         this.scopeWorks = works;
         this.scopeWorkKeys = workKeysOf(works);
         this.repair();
@@ -1083,15 +1088,19 @@ export class UpdaterWindow {
         this.message(`已核验：复制 ${result.added} 条。${hidden ? `搜索隐藏的 ${hidden} 条仍保留勾选，未复制。` : ''}${saved.note || ''}`);
     }
 
+    rosterPairingOptions(manualPairs = this.pairs.filter(pair => pair.reason === '手动配对' || pair.reason === '本次新增')) {
+        return {
+            workKeys: this.scopeWorkKeys,
+            manualPairs,
+            unpairedOld: this.unpairedOld,
+            unpairedNew: this.unpairedNew,
+        };
+    }
+
     previewRoster() {
         const { groups } = parseNameList(this.find('[data-scope]').value, { includeGroups: true });
         if (!groups.length || !this.oldBook || !this.newBook) return;
-        const plan = buildRosterUpdate(this.oldBook, this.newBook, groups, this.mode, {
-            workKeys: this.scopeWorkKeys,
-            manualPairs: this.pairs.filter(pair => pair.reason === '手动配对' || pair.reason === '本次新增'),
-            unpairedOld: this.unpairedOld,
-            unpairedNew: this.unpairedNew,
-        });
+        const plan = buildRosterUpdate(this.oldBook, this.newBook, groups, this.mode, this.rosterPairingOptions());
         this.rosterPreview = { plan, before: this.oldBook, target: this.oldName };
         const sections = [
             ['替换', plan.replace], ['复制', plan.copy], ['无变化', plan.unchanged],

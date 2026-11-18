@@ -527,7 +527,7 @@ function exactNameKeys(name, workKeys) {
 function shortNameKey(name, workKeys) {
     const base = nameWithoutPrefixes(name, workKeys);
     const { outside } = splitBrackets(base);
-    const match = outside.trim().match(/^([\p{Script=Han}]{2,3})\s*[·・‧]\s*\p{Script=Han}{2,}(?:\s*[·・‧]\s*\p{Script=Han}{2,})*$/u);
+    const match = outside.trim().match(/^([\p{Script=Han}]{1,3})\s*[·・‧]\s*\p{Script=Han}{2,}(?:\s*[·・‧]\s*\p{Script=Han}{2,})*$/u);
     return match?.[1] || '';
 }
 
@@ -619,7 +619,7 @@ function rosterHits(index, keys, shortKeys = []) {
     return hits;
 }
 
-export function buildRosterUpdate(oldBook, newBook, groups, mode, {
+export function matchRosterEntries(oldBook, newBook, groups, {
     workKeys = [], manualPairs = [], unpairedOld = new Set(), unpairedNew = new Set(),
 } = {}) {
     const sourceIndex = rosterIndex(newBook, workKeys);
@@ -682,7 +682,7 @@ export function buildRosterUpdate(oldBook, newBook, groups, mode, {
                 review.push(`${item.name}（目标条目只有关键词命中，标题不同）`);
                 continue;
             }
-            matched.push({ oldId, newId, checked: true });
+            matched.push({ oldId, newId, checked: true, reason: '名单匹配' });
             claims.set(oldId, (claims.get(oldId) || 0) + 1);
         }
     }
@@ -692,15 +692,20 @@ export function buildRosterUpdate(oldBook, newBook, groups, mode, {
         review.push(`${entries.get(pair.newId).name}（与另一角色匹配到同一目标条目）`);
         return false;
     });
+    return { pairs, additions, namesById: new Map([...entries].map(([id, item]) => [id, item.name])), review, missing };
+}
+
+export function buildRosterUpdate(oldBook, newBook, groups, mode, options) {
+    const { pairs, additions, namesById, review, missing } = matchRosterEntries(oldBook, newBook, groups, options);
     const replace = [], unchanged = [];
     for (const pair of pairs) {
         const names = pairChanged(oldBook, newBook, pair, mode) ? replace : unchanged;
-        names.push(entries.get(pair.newId).name);
+        names.push(namesById.get(pair.newId));
     }
     const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions });
     return {
         result, replace, unchanged, review, missing,
-        copy: result.addedPairs.map(pair => entries.get(pair.newId).name),
+        copy: result.addedPairs.map(pair => namesById.get(pair.newId)),
     };
 }
 
