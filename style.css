@@ -163,10 +163,10 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-entry-settings { margin-top: 8px; border-top: 1px solid var(--wu-border); }
 .stwu-entry-settings summary { min-height: 32px; padding-top: 5px; color: var(--wu-em); cursor: pointer; font-size: .78em; }
 
-.stwu-footer { z-index: 2; display: flex; flex: 0 0 auto; align-items: center; gap: 8px; padding: 6px 10px max(6px,env(safe-area-inset-bottom)); border-top: 1px solid var(--wu-border); background: var(--wu-bg); }
+.stwu-footer { position: sticky; bottom: 0; z-index: 2; display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px max(6px,env(safe-area-inset-bottom)); border-top: 1px solid var(--wu-border); background: var(--wu-bg); }
 .stwu-replace-scope { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--wu-em); font-size: .8em; white-space: nowrap; }
 .stwu .stwu-replace-scope select.text_pole { width: auto; min-width: 112px; min-height: 34px; }
-.stwu-bottom { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 7px; }
+.stwu-bottom { display: flex; flex: 1 1 auto; flex-wrap: wrap; min-width: 0; align-items: center; gap: 7px; }
 .stwu-selection { flex: 1 1 auto; min-width: 0; color: var(--wu-em); text-align: right; font-size: .78em; white-space: nowrap; }
 .stwu-selection-compact { display: none; }
 .stwu .stwu-primary { border-color: var(--wu-quote); font-weight: 600; }
@@ -177,6 +177,11 @@ dialog.stwu-dialog.popup.stwu-expanded {
 .stwu-roster-dialog [data-roster-summary] { white-space: pre-line; overflow-wrap: anywhere; }
 .stwu .stwu-roster-report { min-height: 0; overflow: auto; padding: 6px 8px; border-block: 1px solid var(--wu-border); }
 .stwu-roster-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.stwu-sync-dialog [data-sync-summary] { white-space: pre-line; overflow-wrap: anywhere; }
+.stwu-sync-dialog [data-sync-rows] { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.stwu-sync-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 6px; border: 1px solid var(--wu-border); border-radius: 5px; overflow-wrap: anywhere; }
+.stwu-sync-row :is(select, input) { width: 100%; min-width: 0; }
+.stwu-sync-row [hidden] { display: none; }
 .stwu-consolidate-dialog [data-consolidate-context] { max-height: 12dvh; overflow: auto; overflow-wrap: anywhere; }
 .stwu-consolidate-dialog [data-consolidate-summary] { max-height: 22dvh; overflow: auto; white-space: pre-line; overflow-wrap: anywhere; }
 .stwu-consolidate-dialog [data-consolidate-candidates] { display: flex; flex-direction: column; gap: 6px; min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }

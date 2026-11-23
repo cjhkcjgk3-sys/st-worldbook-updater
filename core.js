@@ -413,6 +413,7 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
     if (options.merge && additions.length) {
         const states = classifyIncoming(oldBook, newBook, pairs, undefined, undefined, options.workKeys);
         const approved = new Set((options.approvedNew || []).map(String));
+        const forceNew = new Set((options.forceNew || []).map(String));
         const seen = new Set(Object.values(next.entries).map(entrySignature)), requested = new Set(), used = new Set(Object.keys(next.entries));
         if (Array.isArray(next.originalData?.entries)) for (const entry of next.originalData.entries) {
             for (const id of [entry?.id, entry?.uid]) if (id !== undefined && /^(0|[1-9]\d*)$/.test(String(id))) used.add(String(id));
@@ -429,7 +430,7 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
             if (usedNew.has(newId)) throw new Error('已配对条目不能同时作为新条目加入，请先解除配对。');
             if (states.get(newId) === 'review' && !approved.has(newId)) throw new Error('存在待处理条目，请先配对或标记为新增。');
             const source = newBook.entries[newId], signature = entrySignature(source);
-            if (seen.has(signature)) { skipped++; continue; }
+            if (seen.has(signature) && !forceNew.has(newId)) { skipped++; continue; }
             if (total >= 10000) throw new Error('融合后将超过 10000 条，请先拆分世界书。');
             while (used.has(String(uid))) uid++;
             const entry = { ...clone(source), uid, displayIndex: ++displayIndex };
@@ -447,6 +448,31 @@ export function buildUpdate(oldBook, newBook, pairs, mode = 'content', options =
         }
     }
     return { data: validateBook(next), updated, skipped, added, addedPairs };
+}
+
+// Selected sources have exactly one decision: replace a specific target, add, or await a decision.
+export function buildSelectedSync(oldBook, newBook, decisions, mode = 'content', workKeys = []) {
+    const pairs = [], additions = [], forceNew = [], pending = [], seenSources = new Set(), seenTargets = new Set();
+    for (const decision of decisions) {
+        const newId = String(decision.newId);
+        if (!own(newBook.entries, newId) || seenSources.has(newId)) throw new Error('母本条目已变化或重复选择，请重新预览。');
+        seenSources.add(newId);
+        if (decision.action === 'pending') { pending.push(newId); continue; }
+        if (decision.action === 'copy' || decision.action === 'copy-again') {
+            additions.push(newId);
+            if (decision.action === 'copy-again') forceNew.push(newId);
+            continue;
+        }
+        if (decision.action !== 'replace') throw new Error('请选择复制或替换。');
+        const oldId = String(decision.oldId ?? '');
+        if (!own(oldBook.entries, oldId)) throw new Error('请选择存在的目标条目，或选择复制为新条目。');
+        if (seenTargets.has(oldId)) throw new Error('多个母本条目选择了同一个替换目标，请分别指定。');
+        seenTargets.add(oldId);
+        pairs.push({ oldId, newId, checked: true, reason: '手动配对' });
+    }
+    if (pending.length) return { pending, pairs, additions, result: null };
+    const result = buildUpdate(oldBook, newBook, pairs, mode, { merge: true, additions, approvedNew: additions, forceNew, workKeys });
+    return { pending, pairs, additions, result };
 }
 
 function matchedSelection(oldBook, newBook, sourceId, targetIds, workKeys) {

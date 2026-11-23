@@ -52,6 +52,7 @@ function setup() {
         'auto-reset': { disabled: false },
     };
     const nodes = {
+        '[data-sync-dialog]': { close() {} },
         '[data-scope]': { value: '' },
         '[data-mode]': { value: 'content' },
         '[data-selection-category]': { value: 'paired', selectedOptions: [{ textContent: '已配对' }] },
@@ -96,50 +97,36 @@ async function withConfirm(answer, work) {
     try { await work(calls); } finally { if (previous === undefined) delete globalThis.confirm; else globalThis.confirm = previous; }
 }
 
-test('automatic matches are selected for replacement, and cancellation never writes', async () => {
+function prepareSync(ui, decisions) {
+    ui.syncPreview = { target: ui.oldName, before: ui.oldBook, mother: ui.newBook, mode: ui.mode, decisions };
+}
+
+test('批量同步替换已配对条目，保留其他目标条目并清除已处理勾选', async () => {
     const { ui } = setup();
-    assert.ok(ui.selectedPairs().some(pair => pair.newId === '11'));
-    await withConfirm(false, async calls => {
-        await ui.apply();
-        assert.equal(ui.service.writes.length, 0);
-        assert.match(calls[0], /替换/);
-    });
-    await withConfirm(true, async () => {
-        await ui.apply();
-        assert.equal(ui.oldBook.entries['1'].content, 'new');
-        assert.equal(ui.service.writes.length, 1);
-    });
+    prepareSync(ui, [{ newId: '11', action: 'replace', oldId: '1' }]);
+    await ui.saveSelectedSync();
+    assert.equal(ui.oldBook.entries['1'].content, 'new');
+    assert.equal(ui.oldBook.entries['0'].content, 'old');
+    assert.equal(ui.isEntryChecked('11'), false);
+    assert.equal(ui.service.writes.length, 1);
 });
 
-test('replacing changed pairs clears replaced pair check while retaining unchecked/other state', async () => {
-    const { ui } = setup();
-    ui.newBook.entries['13'] = entry(13, 'Other', 'old');
-    ui.repair();
-    const unchanged = ui.pairs.find(pair => pair.newId === '13');
-    assert.equal(unchanged.checked, false);
-    assert.equal(ui.changed(unchanged), false);
-    await withConfirm(true, async () => {
-        await ui.apply();
-        assert.equal(ui.pairs.find(pair => pair.newId === '10').checked, false);
-        assert.equal(ui.pairs.find(pair => pair.newId === '13').checked, false);
-    });
-});
-
-test('applyScope restricts replacement pairs to matched names without deleting unpaired entries', async () => {
+test('批量同步将勾选条目纳入处理，即使当前名单和搜索未显示它', async () => {
     const { ui, nodes } = setup();
-    delete ui.newBook.entries['12'];
-    nodes['[data-scope]'].value = 'Alice';
-    ui.applyScope();
-    assert.deepEqual(ui.scopeNames, ['Alice']);
-    const bob = ui.pairs.find(pair => pair.newId === '11');
-    assert.equal(ui.inScope('11'), false);
-    assert.equal(ui.selectedPairs().some(pair => pair.newId === '11'), false);
-    await withConfirm(true, async () => {
-        await ui.apply();
-        assert.equal(ui.oldBook.entries['1'].content, 'old');
-        assert.equal(ui.oldBook.entries['0'].content, 'new');
-        assert.equal(bob.checked, true);
-    });
+    nodes['[data-scope]'].value = 'Alice'; ui.applyScope();
+    ui.filteredRows.new = [];
+    prepareSync(ui, [{ newId: '11', action: 'replace', oldId: '1' }]);
+    await ui.saveSelectedSync();
+    assert.equal(ui.oldBook.entries['1'].content, 'new');
+    assert.equal(ui.oldBook.entries['0'].content, 'old');
+});
+
+test('预览之后更换世界书则拒绝旧同步计划', async () => {
+    const { ui } = setup();
+    prepareSync(ui, [{ newId: '11', action: 'replace', oldId: '1' }]);
+    ui.oldBook = structuredClone(ui.oldBook);
+    await assert.rejects(ui.saveSelectedSync(), /重新预览/);
+    assert.equal(ui.service.writes.length, 0);
 });
 
 test('名单待核对的单字简称不会被整本回退自动勾选', () => {
@@ -235,63 +222,29 @@ test('toggleFilteredSelection only toggles current search results and preserves 
     assert.equal(ui.isEntryChecked('13'), true);
 });
 
-test('copySelected only adds visible missing rows and preserves paired, review and hidden checks', async () => {
+test('明确复制已配对和待核对项，以及搜索隐藏的所选条目', async () => {
     const { ui } = setup();
-    ui.newBook.entries['14'] = entry(14, 'Hidden', 'fresh');
-    ui.repair();
-    for (const id of ['11', '12', '13', '14']) ui.newSelection.set(id, true);
-    ui.filteredRows.new = ['11', '12', '13'].map(id => ({ id, entry: ui.newBook.entries[id] }));
-    assert.deepEqual(ui.visibleCopyIds(), ['13']);
-    await withConfirm(false, async calls => {
-        await ui.copySelected();
-        assert.equal(ui.service.writes.length, 0);
-        assert.match(calls[0], /已配对/);
-        assert.match(calls[0], /待核对/);
-        assert.match(calls[0], /搜索隐藏/);
-    });
-    await withConfirm(true, async () => {
-        await ui.copySelected();
-        assert.equal(ui.oldBook.entries['1'].content, 'old');
-        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Bob').length, 1);
-        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'New').length, 1);
-        assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Hidden').length, 0);
-        assert.equal(ui.isEntryChecked('12'), true);
-        assert.equal(ui.isEntryChecked('13'), false);
-        assert.equal(ui.isEntryChecked('14'), true);
-        assert.equal(ui.pairs.filter(pair => pair.newId === '11').length, 1);
-        assert.equal(ui.pairForSource('11').oldId, '1');
-        ui.repair();
-        assert.equal(ui.pairForSource('11').oldId, '1');
-        assert.equal(ui.isEntryChecked('11'), true);
-    });
+    ui.newBook.entries['14'] = entry(14, 'Hidden', 'fresh'); ui.repair();
+    ui.filteredRows.new = [];
+    prepareSync(ui, ['11', '12', '13', '14'].map(newId => ({ newId, action: 'copy-again' })));
+    await ui.saveSelectedSync();
+    assert.equal(ui.service.writes.length, 1);
+    assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Bob').length, 2);
+    assert.equal(Object.values(ui.oldBook.entries).filter(item => item.comment === 'Hidden').length, 1);
+    assert.equal(ui.pairs.filter(pair => pair.newId === '11').length, 1);
+    assert.notEqual(ui.pairForSource('11').oldId, '1');
+    assert.equal(ui.isEntryChecked('11'), false);
 });
 
-test('rechecking and repeating copy cannot append a second identical copy', async () => {
-    const { ui } = setup();
-    ui.newSelection.set('13', true);
-    await withConfirm(true, async calls => {
-        await ui.copySelected();
-        const count = Object.keys(ui.oldBook.entries).length;
-        ui.newSelection.set('13', true);
-        await ui.copySelected();
-        assert.equal(Object.keys(ui.oldBook.entries).length, count);
-        assert.equal(calls.length, 1);
-        assert.equal(ui.service.writes.length, 1);
-        assert.equal(ui.pairs.filter(pair => pair.newId === '13').length, 1);
-    });
-});
-
-test('copy failure preserves original books, pairs and explicit selections', async () => {
+test('同步失败保留原书、配对和用户勾选', async () => {
     const { ui } = setup();
     ui.newSelection.set('13', true);
     const pairs = structuredClone(ui.pairs), target = structuredClone(ui.oldBook);
+    prepareSync(ui, [{ newId: '13', action: 'copy' }]);
     ui.service.updateDirect = async () => { throw new Error('write failed'); };
-    await withConfirm(true, async () => {
-        await assert.rejects(ui.copySelected(), /write failed/);
-        assert.deepEqual(ui.oldBook, target);
-        assert.deepEqual(ui.pairs, pairs);
-        assert.equal(ui.isEntryChecked('13'), true);
-    });
+    await assert.rejects(ui.saveSelectedSync(), /write failed/);
+    assert.deepEqual(ui.oldBook, target); assert.deepEqual(ui.pairs, pairs);
+    assert.equal(ui.isEntryChecked('13'), true);
 });
 
 test('copied names quote list separators and round trip through name parser', async () => {

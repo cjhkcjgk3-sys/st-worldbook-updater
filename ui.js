@@ -1,8 +1,8 @@
-const VERSION = '1.14.1';
+const VERSION = '1.15.0';
 const MOTHER_SIDE_KEY = 'st-worldbook-updater.mother-side';
 const BACKUP_STORAGE_KEY = 'st-worldbook-updater.temp-backups';
 
-import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSettingsPatch, buildTargetSelfConsolidation, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, diffLines, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, planBatchMatchedDeletion, planTargetSelfDuplicates, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
+import { SETTINGS_FIELDS, applySettingsPatch, autoMatch, buildBatchConsolidation, buildBatchMatchedDeletion, buildConsolidation, buildDirectDeletion, buildMatchedDeletion, buildResolvedRosterUpdate, buildSelectedSync, buildSettingsPatch, buildTargetSelfConsolidation, buildUpdate, cleanEntryName, classifyIncoming, clone, consolidationCandidates, diffLines, listEntries, matchRosterEntries, orderWithPinned, pairChanged, pairManually, parseBook, parseNameList, pickSettings, pinBlock, planBatchConsolidation, planBatchMatchedDeletion, planTargetSelfDuplicates, scopeMatch, setBookEntrySettings, title, workKeysOf } from './core.js';
 
 const retainedPair = pair => pair.reason === '手动配对' || pair.reason === '本次新增';
 const entryIdentity = entry => entry && JSON.stringify([entry.comment?.trim() || '', [...(entry.key || [])].sort()]);
@@ -223,9 +223,17 @@ export class UpdaterWindow {
             </div>
             <footer class="stwu-footer">
               <label class="stwu-replace-scope">替换范围<select class="text_pole" data-mode aria-label="替换范围"><option value="content">仅正文</option><option value="full">完整条目</option></select></label>
-              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy" title="只复制母本当前结果中已勾选的缺失条目">复制所选</button><button type="button" class="menu_button stwu-primary" data-action="replace">替换所选</button><button type="button" class="menu_button stwu-primary" data-action="preview-roster" hidden>按名单更新</button></div>
+              <div class="stwu-bottom"><span class="stwu-selection" aria-live="polite">已勾选 0 条 · 可替换 0 组</span><button type="button" class="menu_button" data-action="copy">复制所选</button><button type="button" class="menu_button" data-action="replace">替换所选</button><button type="button" class="menu_button stwu-primary" data-action="sync-selected">同步所选</button><button type="button" class="menu_button stwu-primary" data-action="preview-roster" hidden>按名单更新</button></div>
             </footer>
           </div></div>
+          <dialog class="stwu-roster-dialog stwu-sync-dialog" aria-labelledby="stwu-sync-heading" data-sync-dialog>
+            <h3 id="stwu-sync-heading">同步所选条目</h3>
+            <p data-sync-summary aria-live="polite"></p>
+            <p>选择复制为新条目，或指定要替换的目标条目。输入名称或编号，从建议中选择。</p>
+            <datalist id="stwu-sync-targets"></datalist>
+            <div data-sync-rows></div>
+            <div class="stwu-roster-actions"><button type="button" class="menu_button" data-action="close-sync">返回</button><button type="button" class="menu_button stwu-primary" data-action="save-sync">确认同步</button></div>
+          </dialog>
           <dialog class="stwu-roster-dialog" aria-labelledby="stwu-roster-heading" data-roster-dialog>
             <h3 id="stwu-roster-heading">按名单更新</h3>
             <p data-roster-summary></p>
@@ -263,6 +271,18 @@ export class UpdaterWindow {
             event.preventDefault(); if (!this.busy) this.hide();
         });
         this.on(this.find('[data-roster-dialog]'), 'cancel', () => { this.rosterPreview = null; });
+        this.on(this.find('[data-sync-dialog]'), 'cancel', () => { this.syncPreview = null; });
+        this.on(this.find('[data-sync-dialog]'), 'change', event => {
+            const row = event.target.closest('[data-sync-id]');
+            if (!row || !this.syncPreview) return;
+            const decision = this.syncPreview.decisions.find(item => item.newId === row.dataset.syncId);
+            if (!decision) return;
+            decision.action = row.querySelector('[data-sync-action]').value;
+            const targetValue = row.querySelector('[data-sync-target]').value.trim();
+            decision.oldId = targetValue.match(/（编号 (\d+)）$/)?.[1] ?? targetValue;
+            row.querySelector('[data-sync-target]').hidden = decision.action !== 'replace';
+            this.renderSyncSummary();
+        });
         this.on(this.find('[data-consolidate-dialog]'), 'cancel', () => { this.targetOperation = null; });
         this.on(this.find('[data-consolidate-dialog]'), 'change', event => {
             if (event.target.matches('[data-target-operation]')) {
@@ -297,8 +317,11 @@ export class UpdaterWindow {
                 this.find('.stwu-pairbar > summary').focus();
             }
             if (action === 'file') this.find('[data-file]').click();
-            if (action === 'replace') this.run(() => this.apply());
-            if (action === 'copy') this.run(() => this.copySelected());
+            if (action === 'replace') this.run(() => this.previewSelectedSync('replace'));
+            if (action === 'copy') this.run(() => this.previewSelectedSync('copy'));
+            if (action === 'sync-selected') this.run(() => this.previewSelectedSync('sync'));
+            if (action === 'close-sync') { this.syncPreview = null; this.find('[data-sync-dialog]').close(); }
+            if (action === 'save-sync') this.run(() => this.saveSelectedSync());
             if (action === 'preview-roster') this.run(() => this.previewRoster());
             if (action === 'close-roster') {
                 this.rosterPreview = null;
@@ -375,7 +398,7 @@ export class UpdaterWindow {
                 if (wasSelected !== event.target.checked) {
                     this.selectedEntryCount += change;
                     if (this.visibleSourceSet.has(sourceId) && this.incoming().states.get(sourceId) === 'new') this.visibleCopyCount += change;
-                    if (pair && this.inScope(pair.newId) && this.changed(pair)) this.selectedUpdateCount += change;
+                    if (pair && this.changed(pair)) this.selectedUpdateCount += change;
                 }
                 this.selectionCountsValid = true;
                 if (this.pinMatches && pair && wasSelected !== event.target.checked) {
@@ -1023,7 +1046,7 @@ export class UpdaterWindow {
         if (!this.changeCache.has(key)) this.changeCache.set(key, pairChanged(this.oldBook, this.newBook, pair, this.mode));
         return this.changeCache.get(key);
     }
-    selectedPairs() { return this.pairs.filter(pair => pair.checked && this.inScope(pair.newId) && this.changed(pair)); }
+    selectedPairs() { return this.pairs.filter(pair => pair.checked && this.changed(pair)); }
 
     select(side, id) {
         if (this.busy) return;
@@ -1220,6 +1243,7 @@ export class UpdaterWindow {
 
     renderControls() {
         for (const node of this.dialog.querySelectorAll('select, input, button, textarea')) node.disabled = this.busy;
+        if (this.syncPreview && !this.busy) this.renderSyncSummary();
         this.find('[data-scope-report]').textContent = this.scopeText();
         this.find('[data-scope-state]').textContent = this.scopeNames.length ? '已填写' : '未填写';
         if (!this.selectionCountsValid) this.refreshSelectionCounts();
@@ -1260,7 +1284,7 @@ export class UpdaterWindow {
         this.renderBulkSelection();
         if (!this.selectionCountsValid) this.refreshSelectionCounts();
         const hasRoster = this.scopeNames.length > 0;
-        const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedEntryCount} 条 · 当前结果可复制 ${this.visibleCopyCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;
+        const summary = this.busy ? '处理中…' : `已勾选 ${this.selectedEntryCount} 条 · 可替换 ${this.selectedUpdateCount} 组`;
         for (const node of this.dialog.querySelectorAll('.stwu-selection')) {
             if (hasRoster && !this.busy) node.textContent = `已勾选 ${this.selectedEntryCount} 条`;
             else node.textContent = node.classList.contains('stwu-selection-compact')
@@ -1270,13 +1294,14 @@ export class UpdaterWindow {
         const copy = this.find('[data-action="copy"]');
         const replace = this.find('[data-action="replace"]');
         const roster = this.find('[data-action="preview-roster"]');
-        copy.hidden = replace.hidden = hasRoster;
+        copy.hidden = replace.hidden = false;
         roster.hidden = !hasRoster;
         roster.disabled = this.busy || this.service.requiresReload || !this.oldBook || !this.newBook;
-        copy.textContent = `复制所选${this.visibleCopyCount ? ` (${this.visibleCopyCount})` : ''}`;
-        replace.textContent = `替换所选${this.selectedUpdateCount ? ` (${this.selectedUpdateCount})` : ''}`;
-        copy.disabled = this.busy || !!this.service.requiresReload || !this.visibleCopyCount || !this.oldBook;
-        replace.disabled = this.busy || !!this.service.requiresReload || !this.selectedUpdateCount || !this.oldBook || !this.newBook;
+        copy.textContent = '复制所选';
+        replace.textContent = '替换所选';
+        copy.disabled = replace.disabled = this.busy || !!this.service.requiresReload || !this.selectedEntryCount || !this.oldBook || !this.newBook;
+        const sync = this.find('[data-action="sync-selected"]');
+        if (sync) sync.disabled = copy.disabled;
     }
 
     refreshSelectionCounts() {
@@ -1378,67 +1403,123 @@ export class UpdaterWindow {
         }
     }
 
-    async apply() {
-        const selectedUpdateIds = new Set(this.selectedPairs().map(pair => pair.newId));
-        const pairs = this.pairs.map(pair => ({ ...pair, checked: selectedUpdateIds.has(pair.newId) }));
-        const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode);
-        if (!result.updated) { this.message(`所选配对条目没有需要替换的内容。${result.skipped ? `无变化 ${result.skipped} 组已跳过。` : ''}`); return; }
-        const scope = this.mode === 'content' ? '仅替换正文，保留目标书设置' : '完整更新条目，同步母本的标题、关键词和设置';
-        const scopeNote = this.scopeNames.length ? `定点名单：${this.scopeNames.join('、')}；名单外不参与替换。\n` : '处理范围：整本。\n';
-        const visible = new Set(this.visibleSourceIds());
-        const hidden = [...selectedUpdateIds].filter(id => !visible.has(id)).length;
-        const hiddenNote = hidden ? `其中 ${hidden} 条被搜索隐藏，但仍参与替换。\n` : '';
-        const skipNote = result.skipped ? `无变化 ${result.skipped} 组将跳过。\n` : '';
-        if (!globalThis.confirm(`将用母本「${this.newName}」的内容替换目标书「${this.oldName}」中已配对的 ${result.updated} 条条目。\n${scopeNote}替换范围：${scope}。\n${hiddenNote}${skipNote}确认继续？`)) return;
-        this.message('正在保存并核验目标书…');
-        const saved = await this.saveTargetFromMother(result.data);
-        this.oldBook = saved.data;
-        if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
-        this.changeCache.clear();
-        this.pairs = this.pairs.map(pair => selectedUpdateIds.has(pair.newId) ? { ...pair, checked: false } : pair);
-        this.syncPairIndex();
-        for (const id of selectedUpdateIds) { this.pairChecks.set(id, false); this.newSelection.set(id, false); }
-        this.selectionCountsValid = false;
-        this.invalidateIncoming();
-        this.message(`已核验并替换 ${result.updated} 组，跳过无变化 ${result.skipped} 组。${saved.note || ''}`);
+    previewSelectedSync(kind = 'sync') {
+        if (!this.oldBook || !this.newBook) throw new Error('请先载入母本和目标书。');
+        const ids = this.selectedSourceIds();
+        if (!ids.length) throw new Error('请先勾选母本条目。');
+        const states = classifyIncoming(this.oldBook, this.newBook, this.pairs, undefined, undefined, this.scopeWorkKeys);
+        const decisions = ids.map(newId => {
+            const pair = this.pairForSource(newId);
+            const action = kind === 'copy' ? 'copy-again' : pair ? 'replace'
+                : kind === 'sync' && states.get(newId) === 'new' ? 'copy' : 'pending';
+            return { newId, action, oldId: pair?.oldId || '' };
+        });
+        decisions.sort((a, b) => Number(b.action === 'pending') - Number(a.action === 'pending'));
+        this.syncPreview = { target: this.oldName, before: this.oldBook, mother: this.newBook, mode: this.mode, decisions };
+        const targets = this.find('#stwu-sync-targets');
+        const options = document.createDocumentFragment();
+        for (const { id, entry } of listEntries(this.oldBook)) {
+            const option = document.createElement('option'); option.value = `${title(entry)}（编号 ${id}）`; options.append(option);
+        }
+        targets.replaceChildren(options);
+        const rows = document.createDocumentFragment();
+        for (const decision of decisions) {
+            const row = element('div', 'stwu-sync-row'); row.dataset.syncId = decision.newId;
+            const label = element('strong', '', `${title(this.newBook.entries[decision.newId])}（母本 ${decision.newId}）`);
+            const select = element('select', 'text_pole'); select.dataset.syncAction = '';
+            select.setAttribute('aria-label', `${title(this.newBook.entries[decision.newId])}的操作`);
+            for (const [value, text] of [['pending', '请选择操作'], ['replace', '替换目标条目'], ['copy', '复制为新条目（跳过相同内容）'], ['copy-again', '复制新副本（允许相同内容）']]) {
+                const option = document.createElement('option'); option.value = value; option.textContent = text; select.append(option);
+            }
+            select.value = decision.action;
+            const input = element('input', 'text_pole'); input.type = 'text';
+            input.dataset.syncTarget = ''; input.setAttribute('list', 'stwu-sync-targets');
+            input.setAttribute('aria-label', `${title(this.newBook.entries[decision.newId])}的替换目标编号`);
+            input.placeholder = '搜索目标条目名称或输入编号'; input.value = decision.oldId; input.hidden = decision.action !== 'replace';
+            const targetName = element('span', 'stwu-sync-target-name');
+            const status = element('span', 'stwu-sync-status');
+            row.append(label, select, input, targetName, status); rows.append(row);
+        }
+        this.find('[data-sync-rows]').replaceChildren(rows);
+        this.renderSyncSummary();
+        this.find('[data-sync-dialog]').showModal();
     }
 
-    async copySelected() {
-        if (!this.oldBook || !this.newBook) throw new Error('请先载入母本和目标书。');
-        const visible = new Set(this.visibleSourceIds());
-        const selectedIds = this.selectedSourceIds();
-        const additions = this.visibleCopyIds();
-        const { states } = this.incoming();
-        const hidden = selectedIds.filter(id => !visible.has(id)).length;
-        const paired = selectedIds.filter(id => visible.has(id) && states.get(id) === 'paired').length;
-        const review = selectedIds.filter(id => visible.has(id) && states.get(id) === 'review').length;
-        const notes = [
-            paired && `已配对 ${paired} 条，可通过「替换所选」更新。`,
-            review && `待核对 ${review} 条，可先确认配对。`,
-            hidden && `搜索隐藏 ${hidden} 条，保留勾选。`,
-        ].filter(Boolean).join(' ');
-        if (!additions.length) { this.message(`当前搜索结果没有可复制的缺失条目。${notes}`); return; }
-        const pairs = this.pairs.map(pair => ({ ...pair, checked: false }));
-        const result = buildUpdate(this.oldBook, this.newBook, pairs, this.mode, { merge: true, additions, workKeys: this.scopeWorkKeys });
-        const skipped = result.skipped ? `已有相同条目 ${result.skipped} 条，已跳过。` : '';
-        if (!result.added) { this.message(`没有需要新增的条目。${skipped}${notes}`); return; }
-        const names = result.addedPairs.slice(0, 12).map(({ newId }) => `- ${title(this.newBook.entries[newId])}`).join('\n');
-        const more = result.added > 12 ? `\n- 另有 ${result.added - 12} 条` : '';
-        if (!globalThis.confirm([`将从母本「${this.newName}」向目标书「${this.oldName}」复制以下 ${result.added} 条缺失条目：\n${names}${more}`, skipped, notes, '确认继续？'].filter(Boolean).join('\n'))) return;
-        this.message('正在向目标书复制条目并核验…');
-        const saved = await this.saveTargetFromMother(result.data);
+    renderSyncSummary() {
+        const preview = this.syncPreview;
+        if (!preview) return;
+        const summary = this.find('[data-sync-summary]'), save = this.find('[data-action="save-sync"]');
+        if (this.service.requiresReload) {
+            summary.textContent = '保存状态需要重新载入世界书，请返回并重新载入后再操作。';
+            save.disabled = true; return;
+        }
+        if (preview.error) {
+            summary.textContent = `${preview.error} 请返回并重新载入后再预览。`;
+            save.disabled = true; return;
+        }
+        const byId = new Map(preview.decisions.map(decision => [decision.newId, decision]));
+        for (const row of this.find('[data-sync-rows]').querySelectorAll('[data-sync-id]')) {
+            const decision = byId.get(row.dataset.syncId);
+            const target = decision?.action === 'replace' ? preview.before.entries[decision.oldId] : null;
+            row.querySelector('.stwu-sync-target-name').textContent = target ? `→ ${title(target)}（目标 ${decision.oldId}）` : '';
+            row.querySelector('.stwu-sync-status').textContent = '';
+        }
+        try {
+            const plan = buildSelectedSync(preview.before, preview.mother, preview.decisions, preview.mode, this.scopeWorkKeys);
+            if (plan.pending.length) {
+                summary.textContent = `已选 ${preview.decisions.length} 条，其中 ${plan.pending.length} 条请指定替换目标或复制为新条目。`;
+                save.disabled = true; return;
+            }
+            const { result } = plan;
+            const added = new Set(result.addedPairs.map(pair => pair.newId));
+            for (const row of this.find('[data-sync-rows]').querySelectorAll('[data-sync-id]')) {
+                const decision = byId.get(row.dataset.syncId);
+                const status = decision.action === 'replace'
+                    ? (this.changed({ oldId: decision.oldId, newId: decision.newId }) ? '将替换' : '内容无变化')
+                    : (added.has(decision.newId) ? '将新增' : '已有相同内容，将跳过；可改为复制新副本');
+                row.querySelector('.stwu-sync-status').textContent = status;
+            }
+            const chosen = new Set(plan.pairs.map(pair => pair.newId));
+            const targets = new Set(plan.pairs.map(pair => pair.oldId));
+            const displaced = this.pairs.filter(pair => !chosen.has(pair.newId) && targets.has(pair.oldId));
+            summary.textContent = `母本「${this.newName}」→ 目标书「${preview.target}」：替换 ${result.updated} 条，复制 ${result.added} 条，无变化或已有相同内容 ${result.skipped} 条。替换范围：${preview.mode === 'content' ? '仅正文' : '完整条目'}。`;
+            if (displaced.length) summary.textContent += ` 将解除 ${displaced.length} 组原有配对。`;
+            save.disabled = !(result.updated || result.added);
+        } catch (error) { summary.textContent = error.message; save.disabled = true; }
+    }
+
+    async saveSelectedSync() {
+        const preview = this.syncPreview;
+        if (this.service.requiresReload) throw new Error('请先重新载入世界书。');
+        if (!preview || preview.target !== this.oldName || preview.before !== this.oldBook || preview.mother !== this.newBook || preview.mode !== this.mode) {
+            throw new Error('世界书或替换范围在预览后已变化，请重新预览。');
+        }
+        const plan = buildSelectedSync(preview.before, preview.mother, preview.decisions, preview.mode, this.scopeWorkKeys);
+        if (plan.pending.length || !plan.result || !(plan.result.updated || plan.result.added)) throw new Error('请先处理全部待决定条目。');
+        this.message('正在写入并核验目标书…');
+        let saved;
+        try { saved = await this.saveTargetFromMother(plan.result.data, preview); }
+        catch (error) { preview.error = error.message || '保存未完成。'; throw error; }
         this.oldBook = saved.data;
         if (this.sourceKind === 'book' && this.oldName === this.newName) this.newBook = saved.data;
-        this.changeCache.clear();
-        this.pairs = [...this.pairs, ...result.addedPairs];
-        this.syncPairIndex();
-        for (const pair of result.addedPairs) {
-            this.newSelection.set(pair.newId, false);
-            this.unpairedNew.delete(pair.newId); this.pairChecks.set(pair.newId, false);
+        const sources = new Set([...plan.pairs, ...plan.result.addedPairs].map(item => item.newId));
+        const targets = new Set(plan.pairs.map(pair => pair.oldId));
+        const displaced = this.pairs.filter(pair => sources.has(pair.newId) || targets.has(pair.oldId));
+        for (const pair of displaced) {
+            if (!sources.has(pair.newId)) this.unpairedNew.add(pair.newId);
+            if (!targets.has(pair.oldId)) this.unpairedOld.add(pair.oldId);
         }
-        this.selectionCountsValid = false;
-        this.invalidateIncoming();
-        this.message(`已核验：复制 ${result.added} 条缺失条目。${skipped}${notes}${saved.note || ''}`);
+        this.pairs = this.pairs.filter(pair => !sources.has(pair.newId) && !targets.has(pair.oldId));
+        for (const pair of [...plan.pairs, ...plan.result.addedPairs]) {
+            this.pairs.push({ ...pair, checked: false });
+            this.unpairedOld.delete(pair.oldId); this.unpairedNew.delete(pair.newId);
+        }
+        const processed = new Set(preview.decisions.map(item => item.newId));
+        for (const pair of this.pairs) if (processed.has(pair.newId)) pair.checked = false;
+        for (const { newId } of preview.decisions) { this.newSelection.set(newId, false); this.pairChecks.set(newId, false); }
+        this.syncPairIndex(); this.changeCache.clear(); this.invalidateIncoming(); this.selectionCountsValid = false;
+        this.syncPreview = null; this.find('[data-sync-dialog]').close();
+        this.message(`已核验：替换 ${plan.result.updated} 条，复制 ${plan.result.added} 条，无变化或已有相同内容 ${plan.result.skipped} 条。${saved.note || ''}`);
     }
 
     sameNamedBook() {

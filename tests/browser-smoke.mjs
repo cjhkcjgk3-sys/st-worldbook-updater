@@ -570,11 +570,10 @@ try {
         assert.equal(await page.locator('[data-list="old"] [data-id="1"] input').isChecked(), true);
         assert.equal(await page.locator('[data-preview-content="new"]').textContent(), '新共同正文');
         assert.equal(state.writes, 0);
-        let replaceConfirmation;
-        page.once('dialog', d => { replaceConfirmation = d.message(); return d.accept(); });
         await page.locator('[data-action="replace"]').click();
-        assert.match(replaceConfirmation, /母本「演示_母本」.*目标书「演示_目标书」/);
-        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验并替换'));
+        assert.match(await page.locator('[data-sync-summary]').textContent(), /母本「演示_母本」.*目标书「演示_目标书」/);
+        await page.locator('[data-action="save-sync"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换'));
         assert.equal(state.writes, 1);
         const persisted = state.books.get('演示_目标书');
         assert.equal(persisted.entries[0].uid, 0);
@@ -638,12 +637,12 @@ try {
             assert.match(await status('old', 2), /配对 \d+ · 有变化/);
             assert.equal(await status('new', 91), await status('old', 2));
         }
-        assert.equal(await page.locator('[data-action="copy"]').isDisabled(), true);
+        assert.equal(await page.locator('[data-action="copy"]').isEnabled(), true);
         assert.equal(state.writes, 0);
         const untouched = structuredClone(state.books.get('演示_目标书').entries[1]);
-        page.once('dialog', dialog => dialog.accept());
         await page.locator('[data-action="replace"]').click();
-        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验并替换'));
+        await page.locator('[data-action="save-sync"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换'));
         assert.equal(state.writes, 1);
         assert.deepEqual(state.books.get('演示_目标书').entries[1], untouched);
         assert.equal(state.books.get('演示_目标书').entries[0].content, newer.entries[90].content);
@@ -664,8 +663,8 @@ try {
         assert.equal(await row('new', 90).locator('input').isChecked(), true);
         assert.equal(await row('new', 91).locator('input').isChecked(), false);
         assert.equal(await row('new', 94).locator('input').isChecked(), false);
-        assert.equal(await page.locator('[data-action="copy"]').isDisabled(), true);
-        assert.equal(await page.locator('[data-action="replace"]').textContent(), '替换所选 (1)');
+        assert.equal(await page.locator('[data-action="copy"]').isEnabled(), true);
+        assert.equal(await page.locator('[data-action="replace"]').textContent(), '替换所选');
         await oldSearch.fill('角色甲');
         assert.equal(await row('old', 2).count(), 0);
         assert.equal(await row('old', 4).count(), 0);
@@ -914,67 +913,25 @@ try {
         await ctx.close();
     }
 
-    // Copy selected + file upload + error protections
+    // Explicit copy includes selected paired, unresolved, and search-hidden sources.
     reset(); {
-        const target = state.books.get('演示_目标书');
-        for (const id of [1, 2]) target.entries[id].content = newer.entries[91].content;
         const { page, ctx, errors } = await prepare();
-        const checkbox = (currentPage, id) => currentPage.locator(`[data-list="new"] [data-id="${id}"] input`);
-        const copyButton = currentPage => currentPage.locator('[data-action="copy"]');
-        const copy = copyButton(page);
-        assert.equal(await checkbox(page, 90).isChecked(), true);
-        assert.equal(await copy.isDisabled(), true);
-        await checkbox(page, 91).check();
-        await checkbox(page, 94).check();
-        const search = page.locator('[data-search="new"]');
-        await search.fill('角色甲');
-        assert.equal(await copy.isDisabled(), true);
-        assert.equal(state.writes, 0);
-        await search.fill('');
-        assert.equal(await copy.textContent(), '复制所选 (1)');
-        let confirmation;
-        page.once('dialog', dialog => { confirmation = dialog.message(); return dialog.accept(); });
-        await copy.click();
-        assert.match(confirmation, /复制以下 1 条缺失条目/);
-        assert.match(confirmation, /^- 新增条目$/m);
-        await page.waitForFunction(() => /^已核验.*复制 1 条缺失条目/.test(document.querySelector('.stwu-notice').textContent));
-        const afterCopy = state.books.get('演示_目标书');
-        const added = Object.entries(afterCopy.entries).filter(([id]) => !Object.hasOwn(target.entries, id));
-        assert.equal(added.length, 1);
-        const [[addedId, addedEntry]] = added;
-        assert.equal(String(addedEntry.uid), addedId);
-        assert.equal(addedEntry.comment, '新增条目');
-        assert.equal(addedEntry.content, newer.entries[94].content);
-        for (const [id, item] of Object.entries(target.entries)) assert.deepEqual(afterCopy.entries[id], item);
-        assert.equal(await checkbox(page, 90).isChecked(), true);
-        assert.equal(await checkbox(page, 91).isChecked(), true);
-        assert.equal(await copy.textContent(), '复制所选');
-        assert.equal(await copy.isDisabled(), true);
-        await copy.evaluate(button => button.click());
-        await checkbox(page, 94).check();
-        assert.equal(await copy.isDisabled(), true);
+        const checkbox = id => page.locator(`[data-list="new"] [data-id="${id}"] input`);
+        await checkbox(91).check(); await checkbox(94).check();
+        await page.locator('[data-search="new"]').fill('角色甲');
+        await page.locator('[data-action="copy"]').click();
+        const dialog = page.locator('[data-sync-dialog]');
+        assert.equal(await dialog.locator('[data-sync-id]').count(), 3);
+        assert.match(await dialog.locator('[data-sync-summary]').textContent(), /复制 3 条/);
+        await dialog.locator('[data-action="save-sync"]').click();
+        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验：替换 0 条，复制 3 条'));
         assert.equal(state.writes, 1);
-
-        page.once('dialog', dialog => dialog.accept());
-        await page.locator('[data-action="replace"]').click();
-        await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.startsWith('已核验并替换 1 组'));
-        const afterReplace = state.books.get('演示_目标书');
-        assert.equal(state.writes, 2);
-        assert.deepEqual(afterReplace.entries, { ...afterCopy.entries, 0: { ...target.entries[0], content: newer.entries[90].content } });
-        await page.locator('.stwu-header-actions [data-action="reload"]').click();
-        await page.waitForFunction(() => !document.querySelector('[data-mode]').disabled);
-        await checkbox(page, 94).check();
-        assert.equal(await copy.isDisabled(), true);
-        await page.close();
-
-        const reopened = await prepare(390, 844, ctx, true);
-        for (const id of [90, 91, 94]) await checkbox(reopened.page, id).check();
-        assert.match(await reopened.page.locator('[data-list="new"] [data-id="94"] .stwu-entry-status').textContent(), /配对 \d+ · 无变化/);
-        assert.equal(await copyButton(reopened.page).isDisabled(), true);
-        assert.equal(state.writes, 2);
-        assert.deepEqual(state.books.get('演示_目标书'), afterReplace);
-        assert.deepEqual([...errors, ...reopened.errors], []);
-        results.push('混合勾选只复制缺少条目，原配对按 UID 替换，重复勾选、重新载入和重开窗口均不新增副本');
+        const target = state.books.get('演示_目标书');
+        assert.equal(Object.values(target.entries).filter(item => item.comment === '角色甲').length, 2);
+        assert.equal(Object.values(target.entries).filter(item => item.comment === '共同标题').length, 3);
+        assert.equal(Object.values(target.entries).filter(item => item.comment === '新增条目').length, 1);
+        assert.deepEqual(errors, []);
+        results.push('显式复制包括已配对、待核对和搜索隐藏的勾选条目');
         await ctx.close();
     }
 
@@ -1068,11 +1025,10 @@ try {
         const { page, ctx } = await prepare();
         await page.locator('[data-list="new"] [data-id="90"] input').uncheck();
         await page.locator('[data-list="new"] [data-id="94"] input').check();
-        let copyConfirmation;
-        page.once('dialog', d => { copyConfirmation = d.message(); return d.accept(); });
         await page.locator('[data-action="copy"]').click();
-        assert.match(copyConfirmation, /母本「演示_母本」.*目标书「演示_目标书」/);
-        await page.waitForFunction(() => /^已核验.*复制 1 条缺失条目/.test(document.querySelector('.stwu-notice').textContent));
+        assert.match(await page.locator('[data-sync-summary]').textContent(), /母本「演示_母本」.*目标书「演示_目标书」/);
+        await page.locator('[data-action="save-sync"]').click();
+        await page.waitForFunction(() => /^已核验.*复制 1 条/.test(document.querySelector('.stwu-notice').textContent));
         assert.equal(Object.keys(state.books.get('演示_目标书').entries).length, 7);
         await page.locator('[data-file]').setInputFiles({ name: '坏文件.json', mimeType: 'application/json', buffer: Buffer.from('{') });
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.includes('JSON 格式不正确'));
@@ -1086,8 +1042,8 @@ try {
     reset(); {
         const { page, ctx } = await prepare();
         state.failWrite = true;
-        page.once('dialog', d => d.accept());
         await page.locator('[data-action="replace"]').click();
+        await page.locator('[data-action="save-sync"]').click();
         await page.waitForFunction(() => document.querySelector('.stwu-notice').textContent.includes('服务器未确认保存'));
         assert.equal(await page.locator('[data-action="replace"]').isDisabled(), true);
         assert.deepEqual(state.books.get('演示_目标书'), old);
